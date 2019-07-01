@@ -27,6 +27,8 @@ class GAT:
         self.learning_rate = kwargs.get('learning_rate', 2e-4)
         self.use_clr = kwargs.get('use_clr', False)
         self.use_momentum = kwargs.get('use_momentum', False)
+        self.units = kwargs.get('units', [32, 64, 2])
+        self.heads = kwargs.get('heads', [4, 4, 6])
 
         self.g = tf.get_default_graph()
         with self.g.as_default():
@@ -37,8 +39,11 @@ class GAT:
                     0.9, use_nesterov=True
                 )
             else:
-                self.optimizer = tf.contrib.opt.AdamWOptimizer(
-                    weight_decay=2e-4,
+                # self.optimizer = tf.contrib.opt.AdamWOptimizer(
+                #     weight_decay=2e-4,
+                #     learning_rate=self.learning_rate * self.lr_multiplier
+                # )
+                self.optimizer = tf.train.AdamOptimizer(
                     learning_rate=self.learning_rate * self.lr_multiplier
                 )
                 # self.optimizer = tf.train.RMSPropOptimizer(1e-3)
@@ -97,7 +102,7 @@ class GAT:
         else:
             raise ValueError('unknown mode')
 
-        aggregated_tensor = gat_model(node_tensor, bias_tensor, [256, 256, 2], [4, 4, 6], 0., 0., self.is_training_ph,
+        aggregated_tensor = gat_model(node_tensor, bias_tensor, self.units, self.heads, 0., 0., self.is_training_ph,
                                       residual=False)
         # output = lib.ops.Linear.linear('OutputMapping', aggregated_tensor.get_shape().as_list()[-1], 2,
         #                                aggregated_tensor)
@@ -197,7 +202,6 @@ class GAT:
             y = y[int(len(y) * 0.1):]
         else:
             dev_node_tensor, dev_bias_mat = dev_data
-
 
         # trim development set, batch size should be a multiple of len(self.gpu_device_list)
         dev_rmd = dev_node_tensor.shape[0] % len(self.gpu_device_list)

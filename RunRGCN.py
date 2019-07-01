@@ -16,6 +16,7 @@ tf.app.flags.DEFINE_integer('nb_gpus', 1, '')
 tf.app.flags.DEFINE_bool('use_clr', True, '')
 tf.app.flags.DEFINE_bool('use_momentum', False, '')
 tf.app.flags.DEFINE_integer('parallel_processes', 1, '')
+tf.app.flags.DEFINE_integer('arch', 1, '')
 FLAGS = tf.app.flags.FLAGS
 
 BATCH_SIZE = 200 * FLAGS.nb_gpus if FLAGS.nb_gpus > 0 else 200
@@ -27,7 +28,7 @@ N_NODE_EMB = len(lib.dataloader.vocab)
 N_EDGE_EMB = len(lib.dataloader.BOND_TYPE)
 
 hp = {
-    'arch': 1, # [1]: RNATracker, [0]: rgcn model
+    'arch': FLAGS.arch, # [1]: RNATracker, [0]: rgcn model
     'learning_rate': 2e-4,
     'dropout_rate': 0.2,
     'use_clr': FLAGS.use_clr,

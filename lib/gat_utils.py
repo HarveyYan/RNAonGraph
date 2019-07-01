@@ -1,6 +1,16 @@
-import numpy as np
 import tensorflow as tf
 import lib.ops.LSTM
+
+
+def normalize(name, inputs, use_bn, is_training_ph):
+    with tf.variable_scope(name):
+        if use_bn:
+            return tf.contrib.layers.batch_norm(inputs, fused=True, decay=0.9, is_training=is_training_ph,
+                                                scope='BN', reuse=tf.get_variable_scope().reuse,
+                                                updates_collections=None)
+        else:
+            return tf.contrib.layers.layer_norm(inputs, scope='LN', reuse=tf.get_variable_scope().reuse)
+
 
 def attn_head(name, node_tensor, bias_mat, hidden_units, activation, is_training_ph,
               in_drop=0.0, coef_drop=0.0, residual=False):
@@ -20,6 +30,7 @@ def attn_head(name, node_tensor, bias_mat, hidden_units, activation, is_training
         coefs = tf.layers.dropout(coefs, coef_drop, is_training_ph)
         node_tensor = tf.layers.dropout(node_tensor, in_drop, is_training_ph)
 
+        # message passing
         vals = tf.matmul(coefs, node_tensor)
         ret = tf.contrib.layers.bias_add(vals)
 
@@ -48,6 +59,9 @@ def gat_model(inputs, bias_mat, hid_units, n_heads, attn_drop, ffd_drop, is_trai
                 output = tf.add_n(attns) / n_heads[-1]
             else:
                 output = tf.concat(attns, axis=-1)
+
+            output = normalize('bn%d'%(i), output, True, is_training_ph)
+
 
     with tf.variable_scope('aggregation_stage'):
         output = lib.ops.LSTM.naive_attention('naive_attention', 50, output)

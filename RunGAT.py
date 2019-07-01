@@ -30,10 +30,12 @@ N_EDGE_EMB = len(lib.dataloader.BOND_TYPE)
 
 hp = {
     'arch': 1,
-    'learning_rate': 2e-4,
+    'learning_rate': 1e-3,
     'dropout_rate': 0.2,
     'use_clr': FLAGS.use_clr,
-    'use_momentum': FLAGS.use_momentum
+    'use_momentum': FLAGS.use_momentum,
+    'units': [32, 32, 64, 64, 2],
+    'heads': [6, 6, 6, 6, 6],
 }
 
 
@@ -54,6 +56,8 @@ def run_one_rbp(idx, q):
     os.makedirs(rbp_output)
 
     dataset = lib.dataloader.load_clip_seq([rbp])[0]  # load one at a time
+
+    # RNA secondary structures are sparse, therefore separating attention by relation would be a bad idea
     train_bias_mat = lib.rna_utils.adj_to_bias(np.greater(dataset['train_adj_mat'], 0).astype(np.int32))
     test_bias_mat = lib.rna_utils.adj_to_bias(np.greater(dataset['test_adj_mat'], 0).astype(np.int32))
     model.fit((dataset['train_seq'], train_bias_mat), dataset['train_label'],

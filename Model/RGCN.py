@@ -38,8 +38,7 @@ class RGCN:
                     0.9, use_nesterov=True
                 )
             else:
-                self.optimizer = tf.contrib.opt.AdamWOptimizer(
-                    weight_decay=2e-4,
+                self.optimizer = tf.train.AdamOptimizer(
                     learning_rate=self.learning_rate * self.lr_multiplier
                 )
                 # self.optimizer = tf.train.RMSPropOptimizer(1e-3)
@@ -125,11 +124,11 @@ class RGCN:
         else:
             raise ValueError('unknown mode')
 
-        output = tf.layers.conv1d(node_tensor, 128, 10, padding='same', activation='relu', use_bias=False, name='conv1')
+        output = tf.layers.conv1d(node_tensor, 128, 10, padding='valid', activation='relu', use_bias=False, name='conv1')
         output = tf.layers.max_pooling1d(output, 3, 3)
         output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
 
-        output = tf.layers.conv1d(output, 128, 10, padding='same', activation='relu', use_bias=False, name='conv2')
+        output = tf.layers.conv1d(output, 128, 10, padding='valid', activation='relu', use_bias=False, name='conv2')
         output = tf.layers.max_pooling1d(output, 3, 3)
         output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
 
@@ -317,6 +316,7 @@ class RGCN:
 
             if logging:
                 logger.update_with_dict({
+                    'epoch': epoch,
                     'cost': train_cost,
                     'acc': train_acc,
                     'auc': train_auc,
