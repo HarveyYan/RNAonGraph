@@ -26,6 +26,7 @@ def graph_convolution_layers(name, inputs, units):
         output = tf.stack([linear('lt_bond_%d' % (i + 1), input_dim, units, annotations)
                            for i in range(nb_bonds)], axis=1)
 
+        '''normalization doesn't really help ==> most nucleotides have two incident edges'''
         # # [batch_size, length, units], message passing through all adjacent nodes and relations
         # output = tf.reduce_sum(tf.matmul(adj, output), axis=1)
         # # normalization factor, equals to the number of adjacent nodes (not relation specific)
@@ -36,6 +37,7 @@ def graph_convolution_layers(name, inputs, units):
         #          linear('self-connect', input_dim, units, annotations)
 
         output = tf.reduce_mean(tf.matmul(adj, output), axis=1)
+        # self-connection \approx residual connection
         output = output + linear('self-connect', input_dim, units, annotations)
         return output
 
@@ -129,7 +131,7 @@ def normalize(name, inputs, use_bn, is_training_ph):
                                                 scope='BN', reuse=tf.get_variable_scope().reuse,
                                                 updates_collections=None)
         else:
-            return tf.contrib.layers.layer_norm(inputs, scope='LN', reuse=tf.get_variable_scope().reuse)
+            return inputs
 
 
 def residual_rgcn_block(name, input_dim, output_dim, inputs, is_training_ph, optimized=False, use_bn=True,

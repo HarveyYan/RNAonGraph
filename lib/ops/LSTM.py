@@ -7,16 +7,12 @@ def bilstm(name, hidden_units, inputs, length, dropout_rate, is_training_ph):
     with tf.variable_scope(name):
         cell_forward = tf.nn.rnn_cell.DropoutWrapper(
             tf.nn.rnn_cell.LSTMCell(hidden_units, name='forward_cell'),
-            output_keep_prob=tf.cond(is_training_ph, lambda:1-dropout_rate, lambda:1.) # keep prob
+            output_keep_prob=tf.cond(is_training_ph, lambda: 1 - dropout_rate, lambda: 1.)  # keep prob
         )
         cell_backward = tf.nn.rnn_cell.DropoutWrapper(
             tf.nn.rnn_cell.LSTMCell(hidden_units, name='backward_cell'),
-            output_keep_prob=tf.cond(is_training_ph, lambda:1-dropout_rate, lambda:1.)
+            output_keep_prob=tf.cond(is_training_ph, lambda: 1 - dropout_rate, lambda: 1.)
         )
-        # cell_forward =  tf.nn.rnn_cell.LSTMCell(hidden_units, name='forward_cell')
-        #
-        # cell_backward =  tf.nn.rnn_cell.LSTMCell(hidden_units, name='backward_cell')
-
 
         state_forward = cell_forward.zero_state(tf.shape(inputs)[0], tf.float32)
         state_backward = cell_backward.zero_state(tf.shape(inputs)[0], tf.float32)
@@ -85,6 +81,58 @@ def self_attention(name, attention_size, inputs, use_conv=False):
         return tf.reduce_sum(sa_weights * stacked, axis=2)  # [batch_size, nb_steps, nb_features]
 
 
+#########################################
+#
+# set2set pooling operations
+#
+#########################################
+
+def BiLSTMEncoder(name, hidden_units, inputs, length, dropout_rate, is_training_ph):
+    with tf.variable_scope(name):
+        cell_forward = tf.nn.rnn_cell.DropoutWrapper(
+            tf.nn.rnn_cell.LSTMCell(hidden_units, name='forward_cell'),
+            output_keep_prob=tf.cond(is_training_ph, lambda: 1 - dropout_rate, lambda: 1.)  # keep prob
+        )
+        cell_backward = tf.nn.rnn_cell.DropoutWrapper(
+            tf.nn.rnn_cell.LSTMCell(hidden_units, name='backward_cell'),
+            output_keep_prob=tf.cond(is_training_ph, lambda: 1 - dropout_rate, lambda: 1.)
+        )
+
+        state_forward = cell_forward.zero_state(tf.shape(inputs)[0], tf.float32)
+        state_backward = cell_backward.zero_state(tf.shape(inputs)[0], tf.float32)
+
+        input_forward = inputs
+        input_backward = tf.reverse(inputs, [1])
+
+        output_forward = tf.TensorArray(tf.float32, size=length, infer_shape=True, dynamic_size=True)
+        output_backward = tf.TensorArray(tf.float32, size=length, infer_shape=True, dynamic_size=True)
+
+        # unroll
+        i = tf.constant(0)
+        while_condition = lambda i, _1, _2, _3, _4: tf.less(i, length)
+
+        def body(i, output_forward, output_backward, state_forward, state_backward):
+            cell_output_forward, state_forward = cell_forward(input_forward[:, i, :], state_forward)
+            output_forward = output_forward.write(i, cell_output_forward)
+            cell_output_backward, state_backward = cell_backward(input_backward[:, i, :], state_backward)
+            output_backward = output_backward.write(i, cell_output_backward)
+            return [tf.add(i, 1), output_forward, output_backward, state_forward, state_backward]
+
+        _, output_forward, output_backward, state_forward, state_backward = tf.while_loop(while_condition, body,
+                                                                                          [i, output_forward,
+                                                                                           output_backward,
+                                                                                           state_forward,
+                                                                                           state_backward])
+        output_forward = tf.transpose(output_forward.stack(), [1, 0, 2])
+        output_backward = tf.reverse(tf.transpose(output_backward.stack(), [1, 0, 2]), [1])
+        output = tf.concat([output_forward, output_backward], axis=2)
+
+        encoder_state = tf.nn.rnn_cell.LSTMStateTuple(c=tf.concat([state_forward[0], state_backward[0]], axis=-1),
+                                                      h=tf.concat([state_forward[1], state_backward[1]], axis=-1))
+
+        return output, encoder_state
+
+
 def set2set_attention(name, encoder_outputs, cell_output):
     '''
     Luong's multiplicative attention
@@ -96,13 +144,18 @@ def set2set_attention(name, encoder_outputs, cell_output):
         return tf.concat([context_vector, cell_output], axis=-1)
 
 
-def set2set_pooling(name, inputs, T):
+def set2set_pooling(name, inputs, T, dropout_rate, is_training_ph, lstm_encoder=False):
     with tf.variable_scope(name):
-        _, _, nb_features = inputs.get_shape().as_list()
-
-        cell = tf.nn.rnn_cell.LSTMCell(nb_features, name='decoder_lstm_cell')
-        start_token = tf.zeros((tf.shape(inputs)[0], nb_features*2))
-        state = cell.zero_state(tf.shape(inputs)[0], tf.float32)
+        nb_features = inputs.get_shape().as_list()[-1]
+        if lstm_encoder:
+            inputs, state = BiLSTMEncoder('BiLSTMEncoder', nb_features, inputs,
+                                          tf.shape(inputs)[1], dropout_rate, is_training_ph)
+            nb_features = state[0].get_shape().as_list()[-1]
+            cell = tf.nn.rnn_cell.LSTMCell(nb_features, name='decoder_lstm_cell')
+        else:
+            cell = tf.nn.rnn_cell.LSTMCell(nb_features, name='decoder_lstm_cell')
+            state = cell.zero_state(tf.shape(inputs)[0], tf.float32)
+        start_token = tf.zeros((tf.shape(inputs)[0], nb_features * 2))
 
         i = tf.constant(0)
         while_condition = lambda i, *args: tf.less(i, T)

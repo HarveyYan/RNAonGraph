@@ -24,7 +24,7 @@ def normalize(name, inputs, is_training_ph, use_bn=True):
                                                 scope='BN', reuse=tf.get_variable_scope().reuse,
                                                 updates_collections=None)
         else:
-            return tf.contrib.layers.layer_norm(inputs, scope='LN', reuse=tf.get_variable_scope().reuse)
+            return inputs
 
 
 def resblock(name, input_dim, output_dim, filter_size, inputs, resample, is_training_ph, r=1.0,
