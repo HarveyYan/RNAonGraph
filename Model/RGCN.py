@@ -23,11 +23,12 @@ class RGCN:
 
         # hyperparams
         self.arch = kwargs.get('arch', 0)
-        self.units = kwargs.get('units', (32, 32, 64, 64))
+        self.units = kwargs.get('units', [32]*6)
         self.dropout_rate = kwargs.get('dropout_rate', 0.2)
         self.learning_rate = kwargs.get('learning_rate', 2e-4)
         self.use_clr = kwargs.get('use_clr', False)
         self.use_momentum = kwargs.get('use_momentum', False)
+        self.use_attention = kwargs.get('use_attention', False)
 
         self.g = tf.get_default_graph()
         with self.g.as_default():
@@ -38,10 +39,14 @@ class RGCN:
                     0.9, use_nesterov=True
                 )
             else:
-                self.optimizer = tf.train.AdamOptimizer(
+                self.optimizer = tf.contrib.opt.AdamWOptimizer(
+                    1e-4,
                     learning_rate=self.learning_rate * self.lr_multiplier
                 )
                 # self.optimizer = tf.train.RMSPropOptimizer(1e-3)
+                # self.optimizer = tf.train.AdamOptimizer(
+                #     learning_rate=self.learning_rate * self.lr_multiplier
+                # )
 
             for i, device in enumerate(self.gpu_device_list):
                 with tf.device(device), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
@@ -104,7 +109,7 @@ class RGCN:
             raise ValueError('unknown mode')
 
         aggregated_tensor = relational_gcn((adj_tensor, None, node_tensor), self.units, self.is_training_ph,
-                                           self.dropout_rate)
+                                           self.dropout_rate, self.use_attention)
         output = lib.ops.Linear.linear('OutputMapping', aggregated_tensor.get_shape().as_list()[-1], 2, aggregated_tensor)
 
 
@@ -146,16 +151,13 @@ class RGCN:
             self.inference_output = output
 
     def _loss(self, split_idx):
-
-        # prediction = tf.nn.sigmoid(self.output[split_idx])
         prediction = tf.nn.softmax(self.output[split_idx])
 
         # binary cross entropy loss
-
+        # prediction = tf.nn.sigmoid(self.output[split_idx])
         # z * -log(sigmoid(x)) + (1 - z) * -log(1 - sigmoid(x))
         # labels = tf.cast(self.labels_split[split_idx], tf.float32)
         # cost = - tf.reduce_mean(labels * tf.log(prediction) + (1 - labels) * tf.log(1 - prediction))
-
         # cost = tf.reduce_mean(
         #     tf.nn.sigmoid_cross_entropy_with_logits(
         #         logits=self.output[split_idx],
@@ -190,42 +192,44 @@ class RGCN:
         self.cost = tf.add_n(self.cost) / len(self.gpu_device_list)
         self.gv = _average_gradients(self.gv)
 
-        # self.acc_val, self.acc_update_op = tf.metrics.accuracy(
-        #     labels=self.labels,
-        #     predictions=tf.cast(tf.greater(self.prediction, 0.5), tf.int32),
-        # )
         self.acc_val, self.acc_update_op = tf.metrics.accuracy(
             labels=self.labels,
             predictions=tf.argmax(self.prediction, axis=-1),
         )
 
-        # self.auc_val, self.auc_update_op = tf.metrics.auc(
-        #     labels=self.labels,
-        #     predictions=self.prediction,
-        # )
         self.auc_val, self.auc_update_op = tf.metrics.auc(
             labels=self.labels,
             predictions=self.prediction[:, 1],
         )
 
-        self.inference_prediction = tf.nn.sigmoid(self.inference_output)
-        # self.inference_acc_val, self.inference_acc_update_op = tf.metrics.accuracy(
-        #     labels=self.labels,
-        #     predictions=tf.cast(tf.greater(self.inference_prediction, 0.5), tf.int32),
-        # )
+        self.inference_prediction = tf.nn.softmax(self.inference_output)
         self.inference_acc_val, self.inference_acc_update_op = tf.metrics.accuracy(
             labels=self.labels,
             predictions=tf.argmax(self.inference_prediction, axis=-1),
         )
 
-        # self.inference_auc_val, self.inference_auc_update_op = tf.metrics.auc(
-        #     labels=self.labels,
-        #     predictions=self.inference_prediction,
-        # )
         self.inference_auc_val, self.inference_auc_update_op = tf.metrics.auc(
             labels=self.labels,
             predictions=self.inference_prediction[:, 1],
         )
+
+        # self.acc_val, self.acc_update_op = tf.metrics.accuracy(
+        #     labels=self.labels,
+        #     predictions=tf.cast(tf.greater(self.prediction, 0.5), tf.int32),
+        # )
+        # self.auc_val, self.auc_update_op = tf.metrics.auc(
+        #     labels=self.labels,
+        #     predictions=self.prediction,
+        # )
+        # self.inference_prediction = tf.nn.sigmoid(self.inference_output)
+        # self.inference_acc_val, self.inference_acc_update_op = tf.metrics.accuracy(
+        #     labels=self.labels,
+        #     predictions=tf.cast(tf.greater(self.inference_prediction, 0.5), tf.int32),
+        # )
+        # self.inference_auc_val, self.inference_auc_update_op = tf.metrics.auc(
+        #     labels=self.labels,
+        #     predictions=self.inference_prediction,
+        # )
 
     def _init_session(self):
         gpu_options = tf.GPUOptions()

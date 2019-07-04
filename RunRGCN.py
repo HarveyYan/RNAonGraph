@@ -16,23 +16,25 @@ tf.app.flags.DEFINE_integer('nb_gpus', 1, '')
 tf.app.flags.DEFINE_bool('use_clr', True, '')
 tf.app.flags.DEFINE_bool('use_momentum', False, '')
 tf.app.flags.DEFINE_integer('parallel_processes', 1, '')
-tf.app.flags.DEFINE_integer('arch', 1, '')
+tf.app.flags.DEFINE_integer('arch', 0, '')
+tf.app.flags.DEFINE_bool('use_attention', False, '')
 FLAGS = tf.app.flags.FLAGS
 
 BATCH_SIZE = 200 * FLAGS.nb_gpus if FLAGS.nb_gpus > 0 else 200
 EPOCHS = FLAGS.epochs  # How many iterations to train for
-DEVICES = ['/gpu:%d' % (i) for i in range(FLAGS.nb_gpus)] if FLAGS.nb_gpus > 0 else ['/cpu:0']
-RBP_LIST = lib.dataloader.all_rbps # ['1_PARCLIP_AGO1234_hg19']
+DEVICES =  ['/gpu:1'] # ['/gpu:%d' % (i) for i in range(FLAGS.nb_gpus)] if FLAGS.nb_gpus > 0 else ['/cpu:0']
+RBP_LIST = ['1_PARCLIP_AGO1234_hg19'] # lib.dataloader.all_rbps
 MAX_LEN = 101
 N_NODE_EMB = len(lib.dataloader.vocab)
 N_EDGE_EMB = len(lib.dataloader.BOND_TYPE)
 
 hp = {
     'arch': FLAGS.arch, # [1]: RNATracker, [0]: rgcn model
-    'learning_rate': 2e-4,
+    'learning_rate': 1e-3,
     'dropout_rate': 0.2,
     'use_clr': FLAGS.use_clr,
-    'use_momentum': FLAGS.use_momentum
+    'use_momentum': FLAGS.use_momentum,
+    'use_attention': FLAGS.use_attention,
 }
 
 

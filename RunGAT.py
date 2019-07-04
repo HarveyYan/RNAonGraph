@@ -34,8 +34,8 @@ hp = {
     'dropout_rate': 0.2,
     'use_clr': FLAGS.use_clr,
     'use_momentum': FLAGS.use_momentum,
-    'units': [32, 32, 64, 64, 2],
-    'heads': [6, 6, 6, 6, 6],
+    'units': [32, 32, 32, 64, 64, 64, 2],
+    'heads': [4, 4, 4, 4, 4, 4, 4],
 }
 
 

@@ -103,7 +103,7 @@ class GAT:
             raise ValueError('unknown mode')
 
         aggregated_tensor = gat_model(node_tensor, bias_tensor, self.units, self.heads, 0., 0., self.is_training_ph,
-                                      residual=False)
+                                      residual=True)
         # output = lib.ops.Linear.linear('OutputMapping', aggregated_tensor.get_shape().as_list()[-1], 2,
         #                                aggregated_tensor)
         output = aggregated_tensor
