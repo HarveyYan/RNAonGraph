@@ -71,5 +71,5 @@ def load_clip_seq(rbp_list=None, p=None):
 
 
 if __name__ == "__main__":
-    dataset = load_clip_seq(['3_HITSCLIP_Ago2_binding_clusters'])
-    print(dataset[0]['train_label'].shape)
+    dataset = load_clip_seq(['11_CLIPSEQ_ELAVL1_hg19'])
+    print(len(np.where(dataset[0]['train_label'] == 1)[0]))

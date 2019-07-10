@@ -22,14 +22,16 @@ class RGCN:
         self.gpu_device_list = gpu_device_list
 
         # hyperparams
-        self.arch = kwargs.get('arch', 0)
-        self.units = kwargs.get('units', [32] * 6)
+        self.units = kwargs.get('units', [32, 64, 128])
+        self.pool_steps = kwargs.get('pool_steps', 10)
+        self.lstm_encoder = kwargs.get('lstm_encoder', True)
         self.dropout_rate = kwargs.get('dropout_rate', 0.2)
         self.learning_rate = kwargs.get('learning_rate', 2e-4)
         self.use_clr = kwargs.get('use_clr', False)
         self.use_momentum = kwargs.get('use_momentum', False)
         self.use_attention = kwargs.get('use_attention', False)
-        self.use_bn = kwargs.get('use_bn', False)
+        self.use_bn = kwargs.get('use_bn', True)
+        self.expr_residual = kwargs.get('expr_residual', False)
 
         self.g = tf.get_default_graph()
         with self.g.as_default():
@@ -47,21 +49,12 @@ class RGCN:
 
             for i, device in enumerate(self.gpu_device_list):
                 with tf.device(device), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
-                    if self.arch == 0:
-                        self._build_rgcn(i, mode='training')
-                    elif self.arch == 1:
-                        self._build_rnatracker(i, mode='training')
-                    else:
-                        raise ValueError('Unknown option', self.arch)
-
+                    self._build_rgcn(i, mode='training')
                     self._loss(i)
                     self._train(i)
 
             with tf.device(self.gpu_device_list[0]), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
-                if self.arch == 0:
-                    self._build_rgcn(None, mode='inference')
-                elif self.arch == 1:
-                    self._build_rnatracker(None, mode='inference')
+                self._build_rgcn(None, mode='inference')
 
             self._merge()
             self.train_op = self.optimizer.apply_gradients(self.gv)
@@ -114,8 +107,8 @@ class RGCN:
             else:
                 hidden_tensor = graph_convolution_layers('graph_convolution_%d' % (i + 1),
                                                          (adj_tensor, hidden_tensor, node_tensor), u)
-            hidden_tensor = normalize('Norm_%d' % (i + 1), hidden_tensor, True, self.is_training_ph)
             hidden_tensor = tf.nn.leaky_relu(hidden_tensor)
+            hidden_tensor = normalize('Norm_%d' % (i + 1), hidden_tensor, self.use_bn, self.is_training_ph)
             hidden_tensor = tf.layers.dropout(hidden_tensor, self.dropout_rate, training=self.is_training_ph)
             # [batch_size, length, u]
 
@@ -130,14 +123,31 @@ class RGCN:
             #                                             (adj_tensor, hidden_tensor, node_tensor),
             #                                             is_training_ph, use_bn=True)
 
-        with tf.variable_scope('graph_aggregation'):
-            annotations = tf.concat([hidden_tensor, node_tensor], axix=-1)
-            aggregated_tensor = lib.ops.LSTM.set2set_pooling('set2set_pooling', hidden_tensor, 10, 0.1,
-                                                             self.is_training_ph)
-            # naive_attention('naive_attention', 50, annotations)
+        # with tf.variable_scope('graph_aggregation'):
+        #     annotations = tf.concat([hidden_tensor, node_tensor], axix=-1)
+        #     aggregated_tensor = lib.ops.LSTM.set2set_pooling('set2set_pooling', hidden_tensor, 10, 0.1,
+        #                                                      self.is_training_ph)
+        #
+        #     output = lib.ops.Linear.linear('OutputMapping', aggregated_tensor.get_shape().as_list()[-1], 2,
+        #                                    aggregated_tensor)
 
-        output = lib.ops.Linear.linear('OutputMapping', aggregated_tensor.get_shape().as_list()[-1], 2,
-                                       aggregated_tensor)
+        with tf.variable_scope('seq_scan'):
+            # hidden_tensor = tf.concat([hidden_tensor, node_tensor], axis=-1)
+            output = tf.layers.conv1d(hidden_tensor, self.units[-1], 10, padding='same', use_bias=False, name='conv1')
+            output = tf.nn.leaky_relu(output)
+            output = normalize('bn1', output, self.use_bn, self.is_training_ph)
+            output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
+
+            output = tf.layers.conv1d(output, self.units[-1], 10, padding='same', use_bias=False, name='conv2')
+            output = tf.nn.leaky_relu(output)
+            output = normalize('bn2', output, self.use_bn, self.is_training_ph)
+            output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
+
+        with tf.variable_scope('set2set_pooling'):
+            output = lib.ops.LSTM.set2set_pooling('set2set_pooling', output, self.pool_steps, self.dropout_rate,
+                                                  self.is_training_ph, self.lstm_encoder)
+            output = lib.ops.Linear.linear('OutputMapping', output.get_shape().as_list()[-1], 2,
+                                           output)  # categorical logits
 
         if mode == 'training':
             if not hasattr(self, 'output'):
@@ -265,12 +275,18 @@ class RGCN:
         else:
             dev_node_tensor, dev_adj_mat = dev_data
 
-        # trim development set, batch size should be a multiple of len(self.gpu_device_list)
+        # batch size should be a multiple of len(self.gpu_device_list)
         dev_rmd = dev_node_tensor.shape[0] % len(self.gpu_device_list)
         if dev_rmd != 0:
             dev_node_tensor = dev_node_tensor[:-dev_rmd]
             dev_adj_mat = dev_adj_mat[:-dev_rmd]
             dev_targets = dev_targets[:-dev_rmd]
+
+        train_rmd = node_tensor.shape[0] % len(self.gpu_device_list)
+        if train_rmd != 0:
+            node_tensor = node_tensor[:-train_rmd]
+            adj_mat = adj_mat[:-train_rmd]
+            y = y[:-train_rmd]
 
         size_train = node_tensor.shape[0]
         iters_per_epoch = size_train // batch_size + (0 if size_train % batch_size == 0 else 1)
@@ -284,13 +300,6 @@ class RGCN:
             node_tensor = node_tensor[permute]
             adj_mat = adj_mat[permute]
             y = y[permute]
-
-            # trim
-            train_rmd = node_tensor.shape[0] % len(self.gpu_device_list)
-            if train_rmd != 0:
-                node_tensor = node_tensor[:-train_rmd]
-                adj_mat = adj_mat[:-train_rmd]
-                y = y[:-train_rmd]
 
             for i in range(iters_per_epoch):
                 _node_tensor, _adj_mat, _labels \

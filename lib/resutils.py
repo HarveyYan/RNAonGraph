@@ -20,7 +20,7 @@ def MeanPoolConv(name, input_dim, output_dim, filter_size, inputs, he_init=True,
 def normalize(name, inputs, is_training_ph, use_bn=True):
     with tf.variable_scope(name):
         if use_bn:
-            return tf.contrib.layers.batch_norm(inputs, fused=True, decay=0.9, is_training=is_training_ph,
+            return tf.contrib.layers.batch_norm(inputs, scale=True, fused=True, decay=0.9, is_training=is_training_ph,
                                                 scope='BN', reuse=tf.get_variable_scope().reuse,
                                                 updates_collections=None)
         else:

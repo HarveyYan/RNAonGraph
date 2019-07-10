@@ -16,7 +16,6 @@ tf.app.flags.DEFINE_integer('nb_gpus', 1, '')
 tf.app.flags.DEFINE_bool('use_clr', True, '')
 tf.app.flags.DEFINE_bool('use_momentum', False, '')
 tf.app.flags.DEFINE_integer('parallel_processes', 1, '')
-tf.app.flags.DEFINE_integer('arch', 0, '')
 tf.app.flags.DEFINE_bool('use_attention', False, '')
 FLAGS = tf.app.flags.FLAGS
 
@@ -29,14 +28,12 @@ N_NODE_EMB = len(lib.dataloader.vocab)
 N_EDGE_EMB = len(lib.dataloader.BOND_TYPE)
 
 hp = {
-    'arch': FLAGS.arch, # [1]: RNATracker, [0]: rgcn model
     'learning_rate': 2e-4,
     'dropout_rate': 0.2,
     'use_clr': FLAGS.use_clr,
     'use_momentum': FLAGS.use_momentum,
     'use_attention': FLAGS.use_attention,
 }
-
 
 def Logger(q):
     logger = lib.logger.CSVLogger('rbp-results.csv', output_dir, ['RBP', 'acc', 'auc'])

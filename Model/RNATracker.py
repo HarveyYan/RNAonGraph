@@ -91,17 +91,17 @@ class RNATracker:
 
         with tf.variable_scope('seq_scan'):
             output = tf.layers.conv1d(node_tensor, self.units, 10, padding='same', use_bias=False, name='conv1')
-            output = normalize('bn1', output, self.is_training_ph, self.use_bn)
             output = tf.nn.relu(output)
+            output = normalize('bn1', output, self.is_training_ph, self.use_bn)
             output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
 
             output = tf.layers.conv1d(output, self.units, 10, padding='same', use_bias=False, name='conv2')
-            output = normalize('bn2', output, self.is_training_ph, self.use_bn)
             output = tf.nn.relu(output)
+            output = normalize('bn2', output, self.is_training_ph, self.use_bn)
             output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
 
         with tf.variable_scope('set2set_pooling'):
-            output = lib.ops.LSTM.set2set_pooling('set2set_pooling', output, self.pool_steps, self.dropout_rate,
+            output = lib.ops.LSTM.set2set_pooling('set2set_pooling', output, self.pool_steps, 0.,
                                                   self.is_training_ph,
                                                   self.lstm_encoder)
             output = lib.ops.Linear.linear('OutputMapping', output.get_shape().as_list()[-1], 2,
@@ -202,11 +202,16 @@ class RNATracker:
         else:
             dev_node_tensor = dev_data
 
-        # trim development set, batch size should be a multiple of len(self.gpu_device_list)
+        # batch size should be a multiple of len(self.gpu_device_list)
         dev_rmd = dev_node_tensor.shape[0] % len(self.gpu_device_list)
         if dev_rmd != 0:
             dev_node_tensor = dev_node_tensor[:-dev_rmd]
             dev_targets = dev_targets[:-dev_rmd]
+
+        train_rmd = node_tensor.shape[0] % len(self.gpu_device_list)
+        if train_rmd != 0:
+            node_tensor = node_tensor[:-train_rmd]
+            y = y[:-train_rmd]
 
         size_train = node_tensor.shape[0]
         iters_per_epoch = size_train // batch_size + (0 if size_train % batch_size == 0 else 1)
@@ -219,12 +224,6 @@ class RNATracker:
             permute = np.random.permutation(size_train)
             node_tensor = node_tensor[permute]
             y = y[permute]
-
-            # trim
-            train_rmd = node_tensor.shape[0] % len(self.gpu_device_list)
-            if train_rmd != 0:
-                node_tensor = node_tensor[:-train_rmd]
-                y = y[:-train_rmd]
 
             for i in range(iters_per_epoch):
                 _node_tensor, _labels \

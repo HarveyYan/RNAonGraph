@@ -127,7 +127,7 @@ def relational_gcn(inputs, units, is_training_ph, dropout_rate=0., use_att=False
 def normalize(name, inputs, use_bn, is_training_ph):
     with tf.variable_scope(name):
         if use_bn:
-            return tf.contrib.layers.batch_norm(inputs, fused=True, decay=0.9, is_training=is_training_ph,
+            return tf.contrib.layers.batch_norm(inputs, scale=True, fused=True, decay=0.9, is_training=is_training_ph,
                                                 scope='BN', reuse=tf.get_variable_scope().reuse,
                                                 updates_collections=None)
         else:
