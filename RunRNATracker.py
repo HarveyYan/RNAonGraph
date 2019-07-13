@@ -23,8 +23,8 @@ FLAGS = tf.app.flags.FLAGS
 
 BATCH_SIZE = 200 # 200 * FLAGS.nb_gpus if FLAGS.nb_gpus > 0 else 200
 EPOCHS = FLAGS.epochs  # How many iterations to train for
-DEVICES = ['/gpu:0'] # ['/gpu:%d' % (i) for i in range(FLAGS.nb_gpus)] if FLAGS.nb_gpus > 0 else ['/cpu:0']
-RBP_LIST = ['1_PARCLIP_AGO1234_hg19'] # lib.dataloader.all_rbps
+DEVICES = ['/gpu:%d' % (i) for i in range(FLAGS.nb_gpus)] if FLAGS.nb_gpus > 0 else ['/cpu:0']
+RBP_LIST = lib.dataloader.all_rbps
 MAX_LEN = 101
 N_NODE_EMB = len(lib.dataloader.vocab)
 N_EDGE_EMB = len(lib.dataloader.BOND_TYPE)

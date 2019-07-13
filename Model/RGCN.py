@@ -22,7 +22,7 @@ class RGCN:
         self.gpu_device_list = gpu_device_list
 
         # hyperparams
-        self.units = kwargs.get('units', [32, 64, 128])
+        self.units = kwargs.get('units', [32]*6)
         self.pool_steps = kwargs.get('pool_steps', 10)
         self.lstm_encoder = kwargs.get('lstm_encoder', True)
         self.dropout_rate = kwargs.get('dropout_rate', 0.2)
@@ -132,7 +132,7 @@ class RGCN:
         #                                    aggregated_tensor)
 
         with tf.variable_scope('seq_scan'):
-            # hidden_tensor = tf.concat([hidden_tensor, node_tensor], axis=-1)
+            hidden_tensor = tf.concat([hidden_tensor, node_tensor], axis=-1)
             output = tf.layers.conv1d(hidden_tensor, self.units[-1], 10, padding='same', use_bias=False, name='conv1')
             output = tf.nn.leaky_relu(output)
             output = normalize('bn1', output, self.use_bn, self.is_training_ph)

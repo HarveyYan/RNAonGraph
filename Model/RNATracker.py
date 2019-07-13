@@ -101,9 +101,8 @@ class RNATracker:
             output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
 
         with tf.variable_scope('set2set_pooling'):
-            output = lib.ops.LSTM.set2set_pooling('set2set_pooling', output, self.pool_steps, 0.,
-                                                  self.is_training_ph,
-                                                  self.lstm_encoder)
+            output = lib.ops.LSTM.set2set_pooling('set2set_pooling', output, self.pool_steps, self.dropout_rate,
+                                                  self.is_training_ph, self.lstm_encoder)
             output = lib.ops.Linear.linear('OutputMapping', output.get_shape().as_list()[-1], 2,
                                            output)  # categorical logits
 
