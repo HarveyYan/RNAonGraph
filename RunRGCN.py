@@ -11,7 +11,7 @@ from lib.general_utils import Pool
 from Model.RGCN import RGCN
 
 tf.app.flags.DEFINE_string('output_dir', '', '')
-tf.app.flags.DEFINE_integer('epochs', 200, '')
+tf.app.flags.DEFINE_integer('epochs', 100, '')
 tf.app.flags.DEFINE_integer('nb_gpus', 1, '')
 tf.app.flags.DEFINE_bool('use_clr', True, '')
 tf.app.flags.DEFINE_bool('use_momentum', False, '')
@@ -33,6 +33,11 @@ hp = {
     'use_clr': FLAGS.use_clr,
     'use_momentum': FLAGS.use_momentum,
     'use_attention': FLAGS.use_attention,
+    'use_bn': False,
+    'units': 32,
+    'reuse_weights': False,
+    'layers': 6,
+    'test_gated_nn': False,
 }
 
 def Logger(q):

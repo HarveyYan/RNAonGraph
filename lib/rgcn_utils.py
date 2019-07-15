@@ -3,8 +3,8 @@ from lib.ops.Linear import linear
 from lib.ops.LSTM import set2set_pooling, naive_attention
 
 
-def graph_convolution_layers(name, inputs, units):
-    with tf.variable_scope(name):
+def graph_convolution_layers(name, inputs, units, reuse=True):
+    with tf.variable_scope(name, reuse=tf.AUTO_REUSE if reuse else False):
         # adj_tensor: [batch_size, length, length, nb_bonds]
         adj_tensor, hidden_tensor, node_tensor = inputs
 
@@ -26,7 +26,7 @@ def graph_convolution_layers(name, inputs, units):
         output = tf.stack([linear('lt_bond_%d' % (i + 1), input_dim, units, annotations)
                            for i in range(nb_bonds)], axis=1)
 
-        '''normalization doesn't really help ==> most nucleotides have two incident edges'''
+        '''normalization doesn't really help ==> most nucleotides only have two incident edges'''
         # # [batch_size, length, units], message passing through all adjacent nodes and relations
         # output = tf.reduce_sum(tf.matmul(adj, output), axis=1)
         # # normalization factor, equals to the number of adjacent nodes (not relation specific)
@@ -39,7 +39,7 @@ def graph_convolution_layers(name, inputs, units):
         output = tf.reduce_mean(tf.matmul(adj, output), axis=1)
         # self-connection \approx residual connection
         output = output + linear('self-connect', input_dim, units, annotations)
-        return output
+        return output # messages
 
 
 def att_gcl(name, inputs, units):
