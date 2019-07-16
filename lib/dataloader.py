@@ -70,6 +70,45 @@ def load_clip_seq(rbp_list=None, p=None):
     return clip_data
 
 
+def load_toy_data(p=None):
+    if p is None:
+        pool = Pool(8)
+    else:
+        pool = p
+
+    dataset = {}
+
+    all_seq, adjacency_matrix, all_labels = lib.rna_utils.generate_toy_dataset(80000, 101, pool)
+
+    pos_idx = np.where(all_labels == 1)[0]
+    neg_idx = np.where(all_labels == 0)[0]
+    all_idx = np.concatenate([pos_idx,
+                              neg_idx[np.random.permutation(len(neg_idx))[:2 * len(pos_idx)]]], axis=0)
+    size = len(all_idx)
+    permute = np.random.permutation(size)
+
+    all_seq = all_seq[all_idx][permute]
+    adjacency_matrix = adjacency_matrix[all_idx][permute]
+    all_labels = all_labels[all_idx][permute]
+
+    dataset['test_label'] = all_labels[:int(0.1 * size)]
+    dataset['test_seq'] = all_seq[:int(0.1 * size)]
+    dataset['test_adj_mat'] = adjacency_matrix[:int(0.1 * size)]
+
+    dataset['train_label'] = all_labels[int(0.1 * size):]
+    dataset['train_seq'] = all_seq[int(0.1 * size):]
+    dataset['train_adj_mat'] = adjacency_matrix[int(0.1 * size):]
+
+    if p is None:
+        pool.close()
+        pool.join()
+
+    return dataset
+
+
 if __name__ == "__main__":
-    dataset = load_clip_seq(['11_CLIPSEQ_ELAVL1_hg19'])
-    print(len(np.where(dataset[0]['train_label'] == 1)[0]))
+    # dataset = load_clip_seq(['11_CLIPSEQ_ELAVL1_hg19'])
+    # print(len(np.where(dataset[0]['train_label'] == 1)[0]))
+    dataset = load_toy_data()
+    print(dataset['train_seq'].shape)
+    print(dataset['train_label'].shape)

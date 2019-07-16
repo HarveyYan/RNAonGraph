@@ -122,7 +122,7 @@ def generate_toy_dataset(n, length, p=None):
         2. nucleotidal composition does not matter.
     negative examples: RNA sequences that do not contain this specific motifs
     '''
-    data_path = '../Data/toy-data'
+    data_path = os.path.join(basedir, 'Data/toy-data')
     if not os.path.exists(data_path):
         os.makedirs(data_path)
 
@@ -133,7 +133,7 @@ def generate_toy_dataset(n, length, p=None):
         with open(os.path.join(data_path, 'seq-and-struct.fa'), 'r') as file:
             for line in file:
                 if line[0] == '>':
-                    all_labels.append(int(line.rstrip().split(' ')[-1]))
+                    all_labels.append(int(line.rstrip().split(' ')[-1].split(':')[-1]))
                 elif line[0] in 'ACGT':
                     all_seqs.append(['ACGT'.index(c) for c in line.rstrip()])
 
@@ -172,6 +172,4 @@ def generate_toy_dataset(n, length, p=None):
 
 if __name__ == "__main__":
     all_seqs, adjacency_matrix, all_labels = generate_toy_dataset(80000, 101)
-    print(all_seqs.shape, all_seqs[0])
-    print(adjacency_matrix.shape)
-    print(all_labels.shape)
+    print(np.where(all_labels==1)[0].__len__())
