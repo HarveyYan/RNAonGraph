@@ -19,7 +19,7 @@ tf.app.flags.DEFINE_integer('parallel_processes', 1, '')
 tf.app.flags.DEFINE_bool('use_attention', False, '')
 FLAGS = tf.app.flags.FLAGS
 
-BATCH_SIZE = 200 * FLAGS.nb_gpus if FLAGS.nb_gpus > 0 else 200
+BATCH_SIZE = 200 # * FLAGS.nb_gpus if FLAGS.nb_gpus > 0 else 200
 EPOCHS = FLAGS.epochs  # How many iterations to train for
 DEVICES =  ['/gpu:%d' % (i) for i in range(FLAGS.nb_gpus)] if FLAGS.nb_gpus > 0 else ['/cpu:0']
 RBP_LIST = lib.dataloader.all_rbps
@@ -34,9 +34,9 @@ hp = {
     'use_momentum': FLAGS.use_momentum,
     'use_attention': FLAGS.use_attention,
     'use_bn': False,
-    'units': 32,
-    'reuse_weights': False,
-    'layers': 6,
+    'units': 64,
+    'reuse_weights': True,
+    'layers': 40,
     'test_gated_nn': False,
 }
 

@@ -102,10 +102,18 @@ class RGCN:
         fixing hidden dimension to 32, which presumably gives the best performance
         '''
         if mode == 'training':
-            node_tensor = self.node_input_splits[split_idx]
+            if self.reuse_weights:
+                node_tensor = tf.pad(self.node_input_splits[split_idx],
+                                     [[0, 0], [0, 0], [0, self.units - self.node_dim]])
+            else:
+                node_tensor = self.node_input_splits[split_idx]
             adj_tensor = self.adj_mat_splits[split_idx]
         elif mode == 'inference':
-            node_tensor = self.inference_node
+            if self.reuse_weights:
+                node_tensor = tf.pad(self.inference_node,
+                                     [[0, 0], [0, 0], [0, self.units - self.node_dim]])
+            else:
+                node_tensor = self.inference_node
             adj_tensor = self.inference_adj_mat
         else:
             raise ValueError('unknown mode')
@@ -125,9 +133,9 @@ class RGCN:
             hidden_tensor = tf.layers.dropout(hidden_tensor, self.dropout_rate, training=self.is_training_ph)
             # [batch_size, length, u]
 
+        output = tf.concat([hidden_tensor, node_tensor], axis=-1)
         with tf.variable_scope('seq_scan'):
-            annotations = tf.concat([hidden_tensor, node_tensor], axis=-1)
-            output = tf.layers.conv1d(annotations, self.units, 10, padding='same', use_bias=False, name='conv1')
+            output = tf.layers.conv1d(output, self.units, 10, padding='same', use_bias=False, name='conv1')
             output = normalize('bn1', output, self.use_bn, self.is_training_ph)
             output = tf.nn.relu(output)
             output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
@@ -153,10 +161,18 @@ class RGCN:
 
     def _build_ggnn(self, split_idx, mode):
         if mode == 'training':
-            node_tensor = tf.pad(self.node_input_splits[split_idx], [[0, 0], [0, 0], [0, self.units - self.node_dim]])
+            if self.reuse_weights:
+                node_tensor = tf.pad(self.node_input_splits[split_idx],
+                                     [[0, 0], [0, 0], [0, self.units - self.node_dim]])
+            else:
+                node_tensor = self.node_input_splits[split_idx]
             adj_tensor = self.adj_mat_splits[split_idx]
         elif mode == 'inference':
-            node_tensor = tf.pad(self.inference_node, [[0, 0], [0, 0], [0, self.units - self.node_dim]])
+            if self.reuse_weights:
+                node_tensor = tf.pad(self.inference_node,
+                                     [[0, 0], [0, 0], [0, self.units - self.node_dim]])
+            else:
+                node_tensor = self.inference_node
             adj_tensor = self.inference_adj_mat
         else:
             raise ValueError('unknown mode')
@@ -194,30 +210,28 @@ class RGCN:
                 # [batch_size, length, u]
 
         output = tf.concat([hidden_tensor, node_tensor], axis=-1)
+        with tf.variable_scope('seq_scan'):
+            output = tf.layers.conv1d(output, self.units, 10, padding='same', use_bias=False, name='conv1')
+            output = tf.nn.leaky_relu(output)
+            output = normalize('bn1', output, self.use_bn, self.is_training_ph)
+            output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
 
-        # with tf.variable_scope('seq_scan'):
-        #     hidden_tensor = tf.concat([hidden_tensor, node_tensor], axis=-1)
-        #     output = tf.layers.conv1d(hidden_tensor, self.units, 10, padding='same', use_bias=False, name='conv1')
-        #     output = tf.nn.leaky_relu(output)
-        #     output = normalize('bn1', output, self.use_bn, self.is_training_ph)
-        #     output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
-        #
-        #     output = tf.layers.conv1d(output, self.units[-1], 10, padding='same', use_bias=False, name='conv2')
-        #     output = tf.nn.leaky_relu(output)
-        #     output = normalize('bn2', output, self.use_bn, self.is_training_ph)
-        #     output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
+            output = tf.layers.conv1d(output, self.units, 10, padding='same', use_bias=False, name='conv2')
+            output = tf.nn.leaky_relu(output)
+            output = normalize('bn2', output, self.use_bn, self.is_training_ph)
+            output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
 
-        # with tf.variable_scope('set2set_pooling'):
-        #     output = lib.ops.LSTM.set2set_pooling('set2set_pooling', output, self.pool_steps, self.dropout_rate,
-        #                                           self.is_training_ph, self.lstm_encoder)
-        #     output = lib.ops.Linear.linear('OutputMapping', output.get_shape().as_list()[-1], 2,
-        #                                    output)  # categorical logits
+        with tf.variable_scope('set2set_pooling'):
+            output = lib.ops.LSTM.set2set_pooling('set2set_pooling', output, self.pool_steps, self.dropout_rate,
+                                                  self.is_training_ph, self.lstm_encoder)
+            output = lib.ops.Linear.linear('OutputMapping', output.get_shape().as_list()[-1], 2,
+                                           output)  # categorical logits
 
-        with tf.variable_scope('graph_aggregration'):
-            gated_outputs = tf.nn.sigmoid(
-                lib.ops.Linear.linear('sigmoid_gate_in', 2 * self.units, 1, output)) * \
-                            lib.ops.Linear.linear('gate_transformation', self.units, 2, hidden_tensor)
-            output = tf.reduce_sum(gated_outputs, axis=1)
+        # with tf.variable_scope('graph_aggregration'):
+        #     gated_outputs = tf.nn.sigmoid(
+        #         lib.ops.Linear.linear('sigmoid_gate_in', 2 * self.units, 1, output)) * \
+        #                     lib.ops.Linear.linear('gate_transformation', self.units, 2, hidden_tensor)
+        #     output = tf.reduce_sum(gated_outputs, axis=1)
 
         if mode == 'training':
             if not hasattr(self, 'output'):

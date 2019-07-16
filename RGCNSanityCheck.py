@@ -31,7 +31,7 @@ hp = {
     'use_bn': False,
     'units': 32,
     'reuse_weights': False,
-    'layers': 6,
+    'layers': 10,
     'test_gated_nn': False,
 }
 
@@ -40,9 +40,9 @@ if __name__ == "__main__":
     cur_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     if FLAGS.output_dir == '':
-        output_dir = os.path.join('output', 'RGCN', cur_time)
+        output_dir = os.path.join('output', 'ToyData', cur_time)
     else:
-        output_dir = os.path.join('output', 'RGCN', cur_time + '-' + FLAGS.output_dir)
+        output_dir = os.path.join('output', 'ToyData', cur_time + '-' + FLAGS.output_dir)
 
     os.makedirs(output_dir)
     lib.plot.set_output_dir(output_dir)
