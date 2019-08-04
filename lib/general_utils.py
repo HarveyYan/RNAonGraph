@@ -51,6 +51,6 @@ def compare_two_csvs(path_to_csv_1, path_to_csv_2, experiment, axis_name_1, axis
     plt.savefig('../compare_csvs.png')
 
 if __name__ == "__main__":
-    compare_two_csvs('../output/RGCN/20190713-135007-rgcn-stacking-cnn/rbp-results.csv',
+    compare_two_csvs('../output/RGCN/20190716-180947-rgcn-stacking-cnn-64-40-reusing-weights/rbp-results.csv',
                      '../output/RNATracker/20190705-141134-set2set-t10-128/rbp-results.csv',
-                     'RBP-31', 'RGCN', 'RNATracker-best')
+                     'RBP-31', 'GGNN-64-40', 'RNATracker-best')

@@ -51,7 +51,7 @@ class RNATracker:
                     self._loss(i)
                     self._train(i)
 
-            with tf.device(self.gpu_device_list[0]), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
+            with tf.device('/cpu:0'), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
                 self._build_rnatracker(None, mode='inference')
 
             self._merge()

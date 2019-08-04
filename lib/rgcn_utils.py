@@ -42,8 +42,8 @@ def graph_convolution_layers(name, inputs, units, reuse=True):
         return output # messages
 
 
-def att_gcl(name, inputs, units):
-    with tf.variable_scope(name):
+def att_gcl(name, inputs, units, reuse=True, expr_simplified_att=False):
+    with tf.variable_scope(name, reuse=tf.AUTO_REUSE if reuse else False):
         # [batch_size, length, length, nb_bonds]
         adj_tensor, hidden_tensor, node_tensor = inputs
 
@@ -51,41 +51,69 @@ def att_gcl(name, inputs, units):
         annotations = hidden_tensor if hidden_tensor is not None else node_tensor
 
         input_dim, length = annotations.get_shape().as_list()[-1], annotations.get_shape().as_list()[-2]
-        nb_bonds = adj_tensor.get_shape().as_list()[-1]
+        nb_bonds = adj_tensor.get_shape().as_list()[-1] - 1
 
         # dropping no bond type and adding self-connection
-        adj_tensor = tf.concat([
-            tf.expand_dims(tf.eye(length, [tf.shape(annotations)[0]]), axis=-1),
-            adj_tensor[:, :, :, 1:]
-        ])
+        # adj_tensor = tf.concat([
+        #     tf.tile(tf.eye(length)[None, :, :], [tf.shape(annotations)[0], 1, 1])[:, :, :, None],
+        #     # tf.expand_dims(tf.eye(length, [tf.shape(annotations)[0]]), axis=-1),
+        #     adj_tensor[:, :, :, 1:]
+        # ], axis=-1)
+        adj_tensor = adj_tensor[:, :, :, 1:]
+        # [batch_size, length, length, nb_bonds]
 
         # nb_bonds equals the number of relations. The first relation is self-connection.
-        output = linear('lt', input_dim, units * nb_bonds, annotations)
+        output = linear('lt', input_dim, units * nb_bonds, annotations, biases=False)
 
         '''first step: pre-allocating for massage passing'''
         # [batch_size, length, units, nb_bonds]
+        # (outcoming) messages for each node by relation
         output_by_rel = tf.reshape(output, [-1, length, units, nb_bonds])
-        # [batch_size, length, length, units]
-        # summing(selecting) by relation => a pair of nodes would only have at most one type of relation
+
+        # selecting the message by relation for each pair of nodes => a pair of nodes would only have at most one type of relation
         # reduce_mean/normalization with pre_sum would lead to the ordinary rgcn
+        # NOTE: messages from the entire graph are different for each node, based on the relation types with its neighbors
+        # this is a major difference to the previous graph attention network
+        # [batch_size, length, length, units]
         pre_sum = tf.matmul(adj_tensor, output_by_rel, transpose_b=True)
 
-        '''note, messages haven't been passed yet'''
-        '''second step: compute scores/importance within each relation'''
-        '''multiplicative style'''
-        # [batch_size, nb_bonds, length, units]
-        output_rel_first = tf.transpose(output_by_rel, (0, 3, 1, 2))
-        # [batch_size, length, length, nb_bonds]
-        scores_by_rel = tf.transpose(
-            tf.matmul(output_rel_first, output_rel_first, transpose_b=True),
-            (0, 2, 3, 1)
-        )
-        # soft version attention...
-        sum_rel = tf.reduce_sum(tf.multiply(scores_by_rel, adj_tensor), axis=-1)
-        att_weights = tf.nn.softmax(sum_rel)[:, :, :, None]
-        hidden_tensor = tf.reduce_sum(tf.multiply(pre_sum, att_weights), axis=2)
+        # [batch_size, length, length], determine if interaction between nodes is present
+        bias_mat = (tf.reduce_max(adj_tensor, axis=-1) - 1.) * 1e9
 
-        return hidden_tensor
+        if expr_simplified_att:
+            # simply comparing the node features,
+            # disregarding the connection (and types) between the nodes
+            att_weights = tf.nn.softmax(tf.matmul(
+                linear('message_attention_simplified', units, units, annotations, biases=False),
+                annotations,
+                transpose_b=True
+            ) + bias_mat)
+        else:
+            '''note, messages haven't been passed yet'''
+            '''second step: compute scores by comparing the messages within each relation'''
+            '''multiplicative style'''
+            # [batch_size, nb_bonds, length, units]
+            output_rel_first = tf.transpose(output_by_rel, (0, 3, 1, 2))
+            # [batch_size, length, length, nb_bonds]
+            scores_by_rel = tf.transpose(
+                tf.matmul(
+                    linear('message_attention', units, units, output_rel_first, biases=False),
+                    output_rel_first,
+                    transpose_b=True),
+                (0, 2, 3, 1)
+            )
+            # select scores by relation
+            sum_rel = tf.reduce_sum(tf.multiply(scores_by_rel, adj_tensor), axis=-1)
+
+            # node level attention
+            att_weights = tf.nn.softmax(sum_rel + bias_mat)
+
+        hidden_tensor = tf.reduce_sum(pre_sum * att_weights[:, :, :, None], axis=2)
+
+        # if input_dim == units:
+        #     return hidden_tensor + annotations
+        # else:
+        return hidden_tensor + linear('OutputMapping', input_dim, units, annotations, biases=False)
 
 
 def relational_gcn(inputs, units, is_training_ph, dropout_rate=0., use_att=False):

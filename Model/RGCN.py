@@ -35,6 +35,7 @@ class RGCN:
         self.expr_residual = kwargs.get('expr_residual', False)
         self.reuse_weights = kwargs.get('reuse_weights', False)
         self.test_gated_nn = kwargs.get('test_gated_nn', False)
+        self.expr_simplified_attention = kwargs.get('expr_simplified_attention', False)
 
         self.g = tf.get_default_graph()
         with self.g.as_default():
@@ -124,7 +125,7 @@ class RGCN:
             name = 'graph_convolution' if self.reuse_weights else 'graph_convolution_%d' % (i + 1)
             if self.use_attention:
                 hidden_tensor = att_gcl(name, (adj_tensor, hidden_tensor, node_tensor), u,
-                                        resue=self.reuse_weights)
+                                        reuse=self.reuse_weights, expr_simplified_att=self.expr_simplified_attention)
             else:
                 hidden_tensor = graph_convolution_layers(name, (adj_tensor, hidden_tensor, node_tensor), u,
                                                          reuse=self.reuse_weights)

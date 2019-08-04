@@ -1,15 +1,17 @@
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import sys
 import shutil
 import inspect
 import datetime
 import functools
 import tensorflow as tf
+from importlib import reload
 import multiprocessing as mp
 import lib.plot, lib.dataloader, lib.rgcn_utils, lib.logger, lib.ops.LSTM
 from lib.general_utils import Pool
 from Model.RGCN import RGCN
 
+# tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.FATAL)
 tf.app.flags.DEFINE_string('output_dir', '', '')
 tf.app.flags.DEFINE_integer('epochs', 100, '')
 tf.app.flags.DEFINE_integer('nb_gpus', 1, '')
@@ -17,6 +19,7 @@ tf.app.flags.DEFINE_bool('use_clr', True, '')
 tf.app.flags.DEFINE_bool('use_momentum', False, '')
 tf.app.flags.DEFINE_integer('parallel_processes', 1, '')
 tf.app.flags.DEFINE_bool('use_attention', False, '')
+tf.app.flags.DEFINE_bool('expr_simplified_attention', False, '')
 FLAGS = tf.app.flags.FLAGS
 
 BATCH_SIZE = 200 # * FLAGS.nb_gpus if FLAGS.nb_gpus > 0 else 200
@@ -34,10 +37,11 @@ hp = {
     'use_momentum': FLAGS.use_momentum,
     'use_attention': FLAGS.use_attention,
     'use_bn': False,
-    'units': 64,
+    'units': 32,
     'reuse_weights': True,
-    'layers': 40,
-    'test_gated_nn': False,
+    'layers': 20,
+    'test_gated_nn': True,
+    'expr_simplified_attention': FLAGS.expr_simplified_attention,
 }
 
 def Logger(q):
@@ -51,12 +55,16 @@ def Logger(q):
 
 
 def run_one_rbp(idx, q):
-    print('training', RBP_LIST[idx])
-    model = RGCN(MAX_LEN, N_NODE_EMB, N_EDGE_EMB, DEVICES, **hp)
     rbp = RBP_LIST[idx]
     rbp_output = os.path.join(output_dir, rbp)
     os.makedirs(rbp_output)
 
+    outfile = open(os.path.join(rbp_output, str(os.getpid())) + ".out", "w")
+    sys.stdout = outfile
+    sys.stderr = outfile
+
+    print('training', RBP_LIST[idx])
+    model = RGCN(MAX_LEN, N_NODE_EMB, N_EDGE_EMB, DEVICES, **hp)
     dataset = lib.dataloader.load_clip_seq([rbp])[0] # load one at a time
     model.fit((dataset['train_seq'], dataset['train_adj_mat']), dataset['train_label'],
               EPOCHS, BATCH_SIZE, rbp_output, logging=True)
@@ -65,7 +73,8 @@ def run_one_rbp(idx, q):
     print('Evaluation on held-out test set, acc: %.3f, auc: %.3f' % (acc, auc))
     model.delete()
     del dataset
-    lib.plot.reset()
+    reload(lib.plot)
+    reload(lib.logger)
     q.put({
         'RBP': rbp,
         'acc': acc,
