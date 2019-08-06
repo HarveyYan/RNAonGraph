@@ -10,15 +10,17 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from lib.rgcn_utils import graph_convolution_layers, att_gcl, normalize
 import lib.plot, lib.logger, lib.clr
-import lib.ops.LSTM, lib.ops.Linear
+import lib.ops.LSTM, lib.ops.Linear, lib.ops.Conv1D
 
 
 class RGCN:
 
-    def __init__(self, max_len, node_dim, edge_dim, gpu_device_list=['/gpu:0'], **kwargs):
+    def __init__(self, max_len, node_dim, edge_dim, embedding_vec, gpu_device_list=['/gpu:0'], **kwargs):
         self.max_len = max_len
         self.node_dim = node_dim
         self.edge_dim = edge_dim
+        self.embedding_vec = embedding_vec
+        self.vocab_size = embedding_vec.shape[0]
         self.gpu_device_list = gpu_device_list
 
         # hyperparams
@@ -77,13 +79,12 @@ class RGCN:
 
     def _placeholders(self):
         self.node_input_ph = tf.placeholder(tf.int32, shape=[None, self.max_len])
-        self.node_input_splits = tf.split(tf.one_hot(self.node_input_ph, self.node_dim), len(self.gpu_device_list))
+        self.node_input_splits = tf.split(self.node_input_ph, len(self.gpu_device_list))
 
         self.adj_mat_ph = tf.placeholder(tf.int32, shape=[None, self.max_len, self.max_len])
         self.adj_mat_splits = tf.split(tf.one_hot(self.adj_mat_ph, self.edge_dim), len(self.gpu_device_list))
 
         self.inference_node_ph = tf.placeholder(tf.int32, shape=[None, self.max_len])
-        self.inference_node = tf.one_hot(self.inference_node_ph, self.node_dim)
         self.inference_adj_mat_ph = tf.placeholder(tf.int32, shape=[None, self.max_len, self.max_len])
         self.inference_adj_mat = tf.one_hot(self.inference_adj_mat_ph, self.edge_dim)
 
@@ -104,21 +105,24 @@ class RGCN:
         fixing hidden dimension to 32, which presumably gives the best performance
         '''
         if mode == 'training':
-            if self.reuse_weights:
-                node_tensor = tf.pad(self.node_input_splits[split_idx],
-                                     [[0, 0], [0, 0], [0, self.units - self.node_dim]])
-            else:
-                node_tensor = self.node_input_splits[split_idx]
+            node_tensor = self.node_input_splits[split_idx]
             adj_tensor = self.adj_mat_splits[split_idx]
         elif mode == 'inference':
-            if self.reuse_weights:
-                node_tensor = tf.pad(self.inference_node,
-                                     [[0, 0], [0, 0], [0, self.units - self.node_dim]])
-            else:
-                node_tensor = self.inference_node
+            node_tensor = self.inference_node_ph
             adj_tensor = self.inference_adj_mat
         else:
             raise ValueError('unknown mode')
+
+        embedding = tf.get_variable('embedding_layer', shape=(self.vocab_size, self.node_dim),
+                                    initializer=tf.constant_initializer(self.embedding_vec), trainable=False)
+        node_tensor = tf.nn.embedding_lookup(embedding, node_tensor)
+        if self.reuse_weights:
+            if self.node_dim < self.units:
+                node_tensor = tf.pad(node_tensor,
+                                     [[0, 0], [0, 0], [0, self.units - self.node_dim]])
+            elif self.node_dim > self.units:
+                print('Changing \'self.units\' to %d!' % (self.node_dim))
+                self.units = self.node_dim
 
         hidden_tensor = None
 
@@ -137,12 +141,12 @@ class RGCN:
 
         output = tf.concat([hidden_tensor, node_tensor], axis=-1)
         with tf.variable_scope('seq_scan'):
-            output = tf.layers.conv1d(output, self.units, 10, padding='same', use_bias=False, name='conv1')
+            output = lib.ops.Conv1D.conv1d('conv1', self.units*2, self.units, 10, output, biases=False)
             output = normalize('bn1', output, self.use_bn, self.is_training_ph)
             output = tf.nn.relu(output)
             output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
 
-            output = tf.layers.conv1d(output, self.units, 10, padding='same', use_bias=False, name='conv2')
+            output = lib.ops.Conv1D.conv1d('conv2', self.units, self.units, 10, output, biases=False)
             output = normalize('bn2', output, self.use_bn, self.is_training_ph)
             output = tf.nn.relu(output)
             output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
@@ -163,34 +167,41 @@ class RGCN:
 
     def _build_ggnn(self, split_idx, mode):
         if mode == 'training':
-            if self.reuse_weights:
-                node_tensor = tf.pad(self.node_input_splits[split_idx],
-                                     [[0, 0], [0, 0], [0, self.units - self.node_dim]])
-            else:
-                node_tensor = self.node_input_splits[split_idx]
+            node_tensor = self.node_input_splits[split_idx]
             adj_tensor = self.adj_mat_splits[split_idx]
         elif mode == 'inference':
-            if self.reuse_weights:
-                node_tensor = tf.pad(self.inference_node,
-                                     [[0, 0], [0, 0], [0, self.units - self.node_dim]])
-            else:
-                node_tensor = self.inference_node
+            node_tensor = self.inference_node_ph
             adj_tensor = self.inference_adj_mat
         else:
             raise ValueError('unknown mode')
 
+        with tf.device('/cpu:0'):
+            embedding = tf.get_variable('embedding_layer', shape=(self.vocab_size, self.node_dim),
+                                        initializer=tf.constant_initializer(self.embedding_vec), trainable=False)
+
+        node_tensor = tf.nn.embedding_lookup(embedding, node_tensor)
+        if self.reuse_weights:
+            if self.node_dim < self.units:
+                node_tensor = tf.pad(node_tensor,
+                                     [[0, 0], [0, 0], [0, self.units - self.node_dim]])
+            elif self.node_dim > self.units:
+                print('Changing \'self.units\' to %d!' % (self.node_dim))
+                self.units = self.node_dim
+
         hidden_tensor = None
         with tf.variable_scope('gated-rgcn', reuse=tf.AUTO_REUSE):
-
             if self.lstm_ggnn:
+                with tf.device('/cpu:0'):
+                    cell = tf.nn.rnn_cell.LSTMCell(self.units, name='lstm_cell')
                 cell = tf.nn.rnn_cell.DropoutWrapper(
-                    tf.nn.rnn_cell.LSTMCell(self.units, name='lstm_cell'),
+                    cell,
                     output_keep_prob=tf.cond(self.is_training_ph, lambda: 1 - self.dropout_rate, lambda: 1.)
                     # keep prob
                 )
                 memory = None
             else:
-                cell = tf.contrib.rnn.GRUCell(self.units)
+                with tf.device('/cpu:0'):
+                    cell = tf.contrib.rnn.GRUCell(self.units)
 
             for i in range(self.layers):
                 name = 'graph_convolution' if self.reuse_weights else 'graph_convolution_%d' % (i + 1)
@@ -281,7 +292,8 @@ class RGCN:
 
     def _train(self, split_idx):
         gv = self.optimizer.compute_gradients(self.cost[split_idx],
-                                              var_list=[var for var in tf.trainable_variables()])
+                                              var_list=[var for var in tf.trainable_variables()],
+                                              colocate_gradients_with_ops=True)
 
         if not hasattr(self, 'gv'):
             self.gv = [gv]

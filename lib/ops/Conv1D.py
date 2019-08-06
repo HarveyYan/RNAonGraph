@@ -28,8 +28,9 @@ def conv1d(name, input_dim, output_dim, filter_size, inputs, stride=1, he_init=T
         else:  # Normalized init (Glorot)
             filters_stdev = np.sqrt(2 / (fan_in + fan_out))
 
-        filters = tf.get_variable('filters', shape=(filter_size, input_dim, output_dim),
-                                  initializer=uniform_init(filters_stdev))
+        with tf.device('/cpu:0'):
+            filters = tf.get_variable('filters', shape=(filter_size, input_dim, output_dim),
+                                      initializer=uniform_init(filters_stdev))
 
         result = tf.nn.conv1d(
             value=inputs,
@@ -39,7 +40,8 @@ def conv1d(name, input_dim, output_dim, filter_size, inputs, stride=1, he_init=T
         )
 
         if biases:
-            bias = tf.get_variable('bias', shape=(output_dim,), initializer=tf.initializers.zeros())
+            with tf.device('/cpu:0'):
+                bias = tf.get_variable('bias', shape=(output_dim,), initializer=tf.initializers.zeros())
             result = tf.nn.bias_add(result, bias)
 
         return result
@@ -65,9 +67,10 @@ def transposd_conv1d(name, input_dim, output_dim, filter_size, inputs, he_init=T
         else:  # Normalized init (Glorot)
             filters_stdev = np.sqrt(2 / (fan_in + fan_out))
 
-        # requires [filter_width, output_channels, in_channels] of a kernel
-        filters = tf.get_variable('filters', shape=(filter_size, output_dim, input_dim),
-                                  initializer=uniform_init(filters_stdev))
+        with tf.device('/cpu:0'):
+            # requires [filter_width, output_channels, in_channels] of a kernel
+            filters = tf.get_variable('filters', shape=(filter_size, output_dim, input_dim),
+                                      initializer=uniform_init(filters_stdev))
 
         # infer output shape
         input_shape = tf.shape(inputs)
@@ -82,7 +85,8 @@ def transposd_conv1d(name, input_dim, output_dim, filter_size, inputs, he_init=T
         )
 
         if biases:
-            bias = tf.get_variable('bias', shape=(output_dim,), initializer=tf.initializers.zeros())
+            with tf.device('/cpu:0'):
+                bias = tf.get_variable('bias', shape=(output_dim,), initializer=tf.initializers.zeros())
             result = tf.nn.bias_add(result, bias)
 
         return result

@@ -1,7 +1,8 @@
 import tensorflow as tf
 import numpy as np
 
-def linear(name, input_dim, output_dim, inputs, initialization = None, biases=True):
+
+def linear(name, input_dim, output_dim, inputs, initialization=None, biases=True):
     with tf.variable_scope(name):
 
         def uniform_init(stdev):
@@ -53,7 +54,8 @@ def linear(name, input_dim, output_dim, inputs, initialization = None, biases=Tr
         else:
             raise Exception('Unknown initialization!')
 
-        weight = tf.get_variable('W', shape=(input_dim, output_dim), initializer=init)
+        with tf.device('/cpu:0'):
+            weight = tf.get_variable('W', shape=(input_dim, output_dim), initializer=init)
 
         if inputs.get_shape().ndims == 2:
             result = tf.matmul(inputs, weight)
@@ -64,9 +66,11 @@ def linear(name, input_dim, output_dim, inputs, initialization = None, biases=Tr
             result = tf.reshape(result, tf.stack(tf.unstack(tf.shape(inputs))[:-1] + [output_dim]))
 
         if biases:
+            with tf.device('/cpu:0'):
+                bias = tf.get_variable('b', shape=(output_dim,), initializer=tf.zeros_initializer())
             result = tf.nn.bias_add(
                 result,
-                bias=tf.get_variable('b', shape=(output_dim,), initializer=tf.zeros_initializer())
+                bias=bias
             )
 
         return result

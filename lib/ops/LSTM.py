@@ -1,16 +1,20 @@
 import tensorflow as tf
-import lib.ops.Linear, lib.ops.BatchNorm
+import lib.ops.Linear
 import functools
 
 
 def bilstm(name, hidden_units, inputs, length, dropout_rate, is_training_ph):
     with tf.variable_scope(name):
+        with tf.device('/cpu:0'):
+            cell_forward = tf.nn.rnn_cell.LSTMCell(hidden_units, name='forward_cell')
+            cell_backward = tf.nn.rnn_cell.LSTMCell(hidden_units, name='backward_cell')
+
         cell_forward = tf.nn.rnn_cell.DropoutWrapper(
-            tf.nn.rnn_cell.LSTMCell(hidden_units, name='forward_cell'),
+            cell_forward,
             output_keep_prob=tf.cond(is_training_ph, lambda: 1 - dropout_rate, lambda: 1.)  # keep prob
         )
         cell_backward = tf.nn.rnn_cell.DropoutWrapper(
-            tf.nn.rnn_cell.LSTMCell(hidden_units, name='backward_cell'),
+            cell_backward,
             output_keep_prob=tf.cond(is_training_ph, lambda: 1 - dropout_rate, lambda: 1.)
         )
 
@@ -89,12 +93,16 @@ def self_attention(name, attention_size, inputs, use_conv=False):
 
 def BiLSTMEncoder(name, hidden_units, inputs, length, dropout_rate, is_training_ph):
     with tf.variable_scope(name):
+        with tf.device('/cpu:0'):
+            cell_forward = tf.nn.rnn_cell.LSTMCell(hidden_units, name='forward_cell')
+            cell_backward = tf.nn.rnn_cell.LSTMCell(hidden_units, name='backward_cell')
+
         cell_forward = tf.nn.rnn_cell.DropoutWrapper(
-            tf.nn.rnn_cell.LSTMCell(hidden_units, name='forward_cell'),
+            cell_forward,
             output_keep_prob=tf.cond(is_training_ph, lambda: 1 - dropout_rate, lambda: 1.)  # keep prob
         )
         cell_backward = tf.nn.rnn_cell.DropoutWrapper(
-            tf.nn.rnn_cell.LSTMCell(hidden_units, name='backward_cell'),
+            cell_backward,
             output_keep_prob=tf.cond(is_training_ph, lambda: 1 - dropout_rate, lambda: 1.)
         )
 
@@ -151,9 +159,11 @@ def set2set_pooling(name, inputs, T, dropout_rate, is_training_ph, lstm_encoder=
             inputs, state = BiLSTMEncoder('BiLSTMEncoder', nb_features, inputs,
                                           tf.shape(inputs)[1], dropout_rate, is_training_ph)
             nb_features = state[0].get_shape().as_list()[-1]
-            cell = tf.nn.rnn_cell.LSTMCell(nb_features, name='decoder_lstm_cell')
+            with tf.device('/cpu:0'):
+                cell = tf.nn.rnn_cell.LSTMCell(nb_features, name='decoder_lstm_cell')
         else:
-            cell = tf.nn.rnn_cell.LSTMCell(nb_features, name='decoder_lstm_cell')
+            with tf.device('/cpu:0'):
+                cell = tf.nn.rnn_cell.LSTMCell(nb_features, name='decoder_lstm_cell')
             state = cell.zero_state(tf.shape(inputs)[0], tf.float32)
         start_token = tf.zeros((tf.shape(inputs)[0], nb_features * 2))
 

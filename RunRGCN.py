@@ -23,13 +23,11 @@ tf.app.flags.DEFINE_bool('expr_simplified_attention', False, '')
 tf.app.flags.DEFINE_bool('lstm_ggnn', False, '')
 FLAGS = tf.app.flags.FLAGS
 
-BATCH_SIZE = 200 # * FLAGS.nb_gpus if FLAGS.nb_gpus > 0 else 200
+BATCH_SIZE = 200  # * FLAGS.nb_gpus if FLAGS.nb_gpus > 0 else 200
 EPOCHS = FLAGS.epochs  # How many iterations to train for
-DEVICES =  ['/gpu:%d' % (i) for i in range(FLAGS.nb_gpus)] if FLAGS.nb_gpus > 0 else ['/cpu:0']
+DEVICES = ['/gpu:%d' % (i) for i in range(FLAGS.nb_gpus)] if FLAGS.nb_gpus > 0 else ['/cpu:0']
 RBP_LIST = lib.dataloader.all_rbps
 MAX_LEN = 101
-N_NODE_EMB = len(lib.dataloader.vocab)
-N_EDGE_EMB = len(lib.dataloader.BOND_TYPE)
 
 hp = {
     'learning_rate': 2e-4,
@@ -45,6 +43,7 @@ hp = {
     'expr_simplified_attention': FLAGS.expr_simplified_attention,
     'lstm_ggnn': FLAGS.lstm_ggnn,
 }
+
 
 def Logger(q):
     logger = lib.logger.CSVLogger('rbp-results.csv', output_dir, ['RBP', 'acc', 'auc'])
@@ -66,8 +65,9 @@ def run_one_rbp(idx, q):
     sys.stderr = outfile
 
     print('training', RBP_LIST[idx])
-    model = RGCN(MAX_LEN, N_NODE_EMB, N_EDGE_EMB, DEVICES, **hp)
-    dataset = lib.dataloader.load_clip_seq([rbp])[0] # load one at a time
+    dataset = lib.dataloader.load_clip_seq([rbp])[0]  # load one at a time
+    model = RGCN(MAX_LEN, dataset['VOCAB_VEC'].shape[1], len(lib.dataloader.BOND_TYPE),
+                 dataset['VOCAB_VEC'], DEVICES, **hp)
     model.fit((dataset['train_seq'], dataset['train_adj_mat']), dataset['train_label'],
               EPOCHS, BATCH_SIZE, rbp_output, logging=True)
     all_prediction, acc, auc = model.predict((dataset['test_seq'], dataset['test_adj_mat']),
