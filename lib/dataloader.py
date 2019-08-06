@@ -1,6 +1,7 @@
 import numpy as np
 import os
 import sys
+from gensim.models import Word2Vec
 
 vocab = 'ACGTN'
 basedir = os.path.split(os.path.dirname(os.path.abspath(__file__)))[0]
@@ -68,6 +69,27 @@ def load_clip_seq(rbp_list=None, p=None):
         pool.join()
 
     return clip_data
+
+
+def get_kmers(seqs, kmer_len):
+    sentence = []
+    for seq in seqs:
+        kmers = []
+        for j in range(len(seq)):
+            kmers.append(seq[j-kmer_len//2: j + kmer_len//2])
+        sentence.append(kmers)
+    return sentence
+
+
+def pretrain_word2vec(seqs, kmer_len, stride, window, embedding_size, save_path):
+    print('word2vec pretaining')
+    sentence = get_kmers(seqs, kmer_len, stride)
+    model = Word2Vec(sentence, window=window, size=embedding_size,
+                     min_count=0, workers=20)
+    # to capture as much dependency as possible
+    model.train(sentence, total_examples=len(sentence), epochs=100)
+    model.save(save_path)
+
 
 
 def load_toy_data(p=None):

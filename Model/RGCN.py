@@ -36,8 +36,9 @@ class RGCN:
         self.reuse_weights = kwargs.get('reuse_weights', False)
         self.test_gated_nn = kwargs.get('test_gated_nn', False)
         self.expr_simplified_attention = kwargs.get('expr_simplified_attention', False)
+        self.lstm_ggnn = kwargs.get('lstm_ggnn', False)
 
-        self.g = tf.get_default_graph()
+        self.g = tf.Graph()
         with self.g.as_default():
             self._placeholders()
             if self.use_momentum:
@@ -60,7 +61,7 @@ class RGCN:
                     self._loss(i)
                     self._train(i)
 
-            with tf.device(self.gpu_device_list[0]), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
+            with tf.device('/cpu:0'), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
                 if self.test_gated_nn:
                     self._build_ggnn(None, mode='inference')
                 else:
@@ -181,13 +182,16 @@ class RGCN:
         hidden_tensor = None
         with tf.variable_scope('gated-rgcn', reuse=tf.AUTO_REUSE):
 
-            # cell = tf.nn.rnn_cell.DropoutWrapper(
-            #     tf.nn.rnn_cell.LSTMCell(self.units, name='lstm_cell'),
-            #     output_keep_prob=tf.cond(self.is_training_ph, lambda: 1 - self.dropout_rate, lambda: 1.)  # keep prob
-            # )
+            if self.lstm_ggnn:
+                cell = tf.nn.rnn_cell.DropoutWrapper(
+                    tf.nn.rnn_cell.LSTMCell(self.units, name='lstm_cell'),
+                    output_keep_prob=tf.cond(self.is_training_ph, lambda: 1 - self.dropout_rate, lambda: 1.)
+                    # keep prob
+                )
+                memory = None
+            else:
+                cell = tf.contrib.rnn.GRUCell(self.units)
 
-            cell = tf.contrib.rnn.GRUCell(self.units)
-            # cell = tf.keras.layers.LSTMCell(self.units)
             for i in range(self.layers):
                 name = 'graph_convolution' if self.reuse_weights else 'graph_convolution_%d' % (i + 1)
                 if self.use_attention:
@@ -200,12 +204,19 @@ class RGCN:
                 msg_tensor = normalize('Norm_%d' % (i + 1), msg_tensor, self.use_bn, self.is_training_ph)
                 msg_tensor = tf.layers.dropout(msg_tensor, self.dropout_rate, training=self.is_training_ph)
 
-                if hidden_tensor is None:
+                if hidden_tensor is None:  # hidden_state
                     state = tf.reshape(node_tensor, [-1, self.units])
                 else:
                     state = tf.reshape(hidden_tensor, [-1, self.units])
 
-                new_state = cell(tf.reshape(msg_tensor, [-1, self.units]), state)[1]
+                input = tf.reshape(msg_tensor, [-1, self.units])
+
+                if self.lstm_ggnn:
+                    if i == 0:
+                        memory = tf.zeros(tf.shape(state), tf.float32)
+                    new_state, (memory, _) = cell(input, tf.nn.rnn_cell.LSTMStateTuple(memory, state))
+                else:
+                    new_state, _ = cell(input, state)
 
                 hidden_tensor = tf.reshape(new_state, [-1, self.max_len, self.units])
                 # [batch_size, length, u]
@@ -326,6 +337,7 @@ class RGCN:
     def _init_session(self):
         gpu_options = tf.GPUOptions()
         gpu_options.allow_growth = True
+        gpu_options.visible_device_list = ','.join([device[-1] for device in self.gpu_device_list])
         self.sess = tf.Session(graph=self.g, config=tf.ConfigProto(gpu_options=gpu_options))
         self.sess.run(self.init)
         self.sess.run(self.local_init)
@@ -339,10 +351,8 @@ class RGCN:
         lib.plot.reset()
 
     def fit(self, X, y, epochs, batch_size, output_dir, dev_data=None, dev_targets=None, logging=False):
-
         checkpoints_dir = os.path.join(output_dir, 'checkpoints/')
         os.makedirs(checkpoints_dir)
-
         node_tensor, adj_mat = X
         if dev_data is None or dev_targets is None:
             # split validation set
@@ -359,20 +369,17 @@ class RGCN:
             y = y[train_idx]
         else:
             dev_node_tensor, dev_adj_mat = dev_data
-
         # batch size should be a multiple of len(self.gpu_device_list)
         dev_rmd = dev_node_tensor.shape[0] % len(self.gpu_device_list)
         if dev_rmd != 0:
             dev_node_tensor = dev_node_tensor[:-dev_rmd]
             dev_adj_mat = dev_adj_mat[:-dev_rmd]
             dev_targets = dev_targets[:-dev_rmd]
-
         train_rmd = node_tensor.shape[0] % len(self.gpu_device_list)
         if train_rmd != 0:
             node_tensor = node_tensor[:-train_rmd]
             adj_mat = adj_mat[:-train_rmd]
             y = y[:-train_rmd]
-
         size_train = node_tensor.shape[0]
         iters_per_epoch = size_train // batch_size + (0 if size_train % batch_size == 0 else 1)
         best_dev_cost = np.inf
@@ -385,22 +392,22 @@ class RGCN:
             node_tensor = node_tensor[permute]
             adj_mat = adj_mat[permute]
             y = y[permute]
-
             for i in range(iters_per_epoch):
                 _node_tensor, _adj_mat, _labels \
                     = node_tensor[i * batch_size: (i + 1) * batch_size], \
                       adj_mat[i * batch_size: (i + 1) * batch_size], \
                       y[i * batch_size: (i + 1) * batch_size]
-
-                self.sess.run(self.train_op,
-                              feed_dict={self.node_input_ph: _node_tensor,
-                                         self.adj_mat_ph: _adj_mat,
-                                         self.labels: _labels,
-                                         self.global_step: i,
-                                         self.hf_iters_per_epoch: iters_per_epoch // 2,
-                                         self.is_training_ph: True}
-                              )
-
+                try:
+                    self.sess.run(self.train_op,
+                                  feed_dict={self.node_input_ph: _node_tensor,
+                                             self.adj_mat_ph: _adj_mat,
+                                             self.labels: _labels,
+                                             self.global_step: i,
+                                             self.hf_iters_per_epoch: iters_per_epoch // 2,
+                                             self.is_training_ph: True}
+                                  )
+                except Exception as e:
+                    print(e)
             train_cost, train_acc, train_auc = \
                 self.evaluate((node_tensor, adj_mat), y, batch_size)
             lib.plot.plot('train_cost', train_cost)

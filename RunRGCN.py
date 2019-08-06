@@ -11,7 +11,7 @@ import lib.plot, lib.dataloader, lib.rgcn_utils, lib.logger, lib.ops.LSTM
 from lib.general_utils import Pool
 from Model.RGCN import RGCN
 
-# tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.FATAL)
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.FATAL)
 tf.app.flags.DEFINE_string('output_dir', '', '')
 tf.app.flags.DEFINE_integer('epochs', 100, '')
 tf.app.flags.DEFINE_integer('nb_gpus', 1, '')
@@ -20,6 +20,7 @@ tf.app.flags.DEFINE_bool('use_momentum', False, '')
 tf.app.flags.DEFINE_integer('parallel_processes', 1, '')
 tf.app.flags.DEFINE_bool('use_attention', False, '')
 tf.app.flags.DEFINE_bool('expr_simplified_attention', False, '')
+tf.app.flags.DEFINE_bool('lstm_ggnn', False, '')
 FLAGS = tf.app.flags.FLAGS
 
 BATCH_SIZE = 200 # * FLAGS.nb_gpus if FLAGS.nb_gpus > 0 else 200
@@ -42,6 +43,7 @@ hp = {
     'layers': 20,
     'test_gated_nn': True,
     'expr_simplified_attention': FLAGS.expr_simplified_attention,
+    'lstm_ggnn': FLAGS.lstm_ggnn,
 }
 
 def Logger(q):

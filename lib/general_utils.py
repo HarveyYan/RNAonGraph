@@ -9,15 +9,15 @@ basedir = os.path.split(os.path.dirname(os.path.abspath(__file__)))[0]
 sys.path.append(basedir)
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-clip_data_path = os.path.join(basedir, 'Data', 'Clip-seq-data')
-all_rbps = [dir for dir in os.listdir(clip_data_path) if dir.split('_')[0].isdigit()]
 
 class NoDaemonProcess(mp.Process):
     # make 'daemon' attribute always return False
     def _get_daemon(self):
         return False
+
     def _set_daemon(self, value):
         pass
+
     daemon = property(_get_daemon, _set_daemon)
 
 
@@ -49,6 +49,7 @@ def compare_two_csvs(path_to_csv_1, path_to_csv_2, experiment, axis_name_1, axis
     plt.ylabel(axis_name_2)
     plt.scatter(file1['auc'], file2['auc'])
     plt.savefig('../compare_csvs.png')
+
 
 if __name__ == "__main__":
     compare_two_csvs('../output/RGCN/20190716-180947-rgcn-stacking-cnn-64-40-reusing-weights/rbp-results.csv',
