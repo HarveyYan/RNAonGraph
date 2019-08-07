@@ -21,6 +21,7 @@ tf.app.flags.DEFINE_integer('parallel_processes', 1, '')
 tf.app.flags.DEFINE_bool('use_attention', False, '')
 tf.app.flags.DEFINE_bool('expr_simplified_attention', False, '')
 tf.app.flags.DEFINE_bool('lstm_ggnn', False, '')
+tf.app.flags.DEFINE_bool('use_embedding', False, '')
 FLAGS = tf.app.flags.FLAGS
 
 BATCH_SIZE = 200  # * FLAGS.nb_gpus if FLAGS.nb_gpus > 0 else 200
@@ -65,7 +66,7 @@ def run_one_rbp(idx, q):
     sys.stderr = outfile
 
     print('training', RBP_LIST[idx])
-    dataset = lib.dataloader.load_clip_seq([rbp])[0]  # load one at a time
+    dataset = lib.dataloader.load_clip_seq([rbp], use_embedding=FLAGS.use_embedding)[0]  # load one at a time
     model = RGCN(MAX_LEN, dataset['VOCAB_VEC'].shape[1], len(lib.dataloader.BOND_TYPE),
                  dataset['VOCAB_VEC'], DEVICES, **hp)
     model.fit((dataset['train_seq'], dataset['train_adj_mat']), dataset['train_label'],

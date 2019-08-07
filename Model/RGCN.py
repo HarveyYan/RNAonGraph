@@ -42,17 +42,18 @@ class RGCN:
 
         self.g = tf.Graph()
         with self.g.as_default():
-            self._placeholders()
-            if self.use_momentum:
-                self.optimizer = tf.contrib.opt.MomentumWOptimizer(
-                    1e-4, self.learning_rate * self.lr_multiplier,
-                    0.9, use_nesterov=True
-                )
-            else:
-                self.optimizer = tf.contrib.opt.AdamWOptimizer(
-                    1e-4,
-                    learning_rate=self.learning_rate * self.lr_multiplier
-                )
+            with tf.device('/cpu:0'):
+                self._placeholders()
+                if self.use_momentum:
+                    self.optimizer = tf.contrib.opt.MomentumWOptimizer(
+                        1e-4, self.learning_rate * self.lr_multiplier,
+                        0.9, use_nesterov=True
+                    )
+                else:
+                    self.optimizer = tf.contrib.opt.AdamWOptimizer(
+                        1e-4,
+                        learning_rate=self.learning_rate * self.lr_multiplier
+                    )
 
             for i, device in enumerate(self.gpu_device_list):
                 with tf.device(device), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
@@ -69,12 +70,12 @@ class RGCN:
                 else:
                     self._build_rgcn(None, mode='inference')
 
-            self._merge()
-            self.train_op = self.optimizer.apply_gradients(self.gv)
-            _stats('RGCN', self.gv)
-            self.saver = tf.train.Saver(max_to_keep=1000)
-            self.init = tf.global_variables_initializer()
-            self.local_init = tf.local_variables_initializer()
+                self._merge()
+                self.train_op = self.optimizer.apply_gradients(self.gv)
+                _stats('RGCN', self.gv)
+                self.saver = tf.train.Saver(max_to_keep=1000)
+                self.init = tf.global_variables_initializer()
+                self.local_init = tf.local_variables_initializer()
         self._init_session()
 
     def _placeholders(self):
@@ -234,14 +235,14 @@ class RGCN:
 
         output = tf.concat([hidden_tensor, node_tensor], axis=-1)
         with tf.variable_scope('seq_scan'):
-            output = tf.layers.conv1d(output, self.units, 10, padding='same', use_bias=False, name='conv1')
-            output = tf.nn.leaky_relu(output)
+            output = lib.ops.Conv1D.conv1d('conv1', self.units * 2, self.units, 10, output, biases=False)
             output = normalize('bn1', output, self.use_bn, self.is_training_ph)
+            output = tf.nn.relu(output)
             output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
 
-            output = tf.layers.conv1d(output, self.units, 10, padding='same', use_bias=False, name='conv2')
-            output = tf.nn.leaky_relu(output)
+            output = lib.ops.Conv1D.conv1d('conv2', self.units, self.units, 10, output, biases=False)
             output = normalize('bn2', output, self.use_bn, self.is_training_ph)
+            output = tf.nn.relu(output)
             output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
 
         with tf.variable_scope('set2set_pooling'):
