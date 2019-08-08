@@ -116,7 +116,7 @@ def fold_and_check_hairpin(seq, return_label=True):
     else:
         annotation = [0] * len(seq)
         for match in re.finditer(regex, struct):
-            start_idx = seq[match.start(): match.end()].index('(((...)))') + match.start()
+            start_idx = struct[match.start(): match.end()].index('(((...)))') + match.start()
             annotation[start_idx:start_idx + 9] = [1] * 9
         return struct, mat, annotation
 

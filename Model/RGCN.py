@@ -291,9 +291,9 @@ class RGCN:
         #     ))
 
         cost = tf.reduce_mean(
-            tf.nn.sparse_softmax_cross_entropy_with_logits(
+            tf.nn.softmax_cross_entropy_with_logits(
                 logits=self.output[split_idx],
-                labels=self.labels_split[split_idx],
+                labels=tf.one_hot(self.labels_split[split_idx], depth=2),
             ))
 
         if not hasattr(self, 'cost'):
@@ -337,7 +337,7 @@ class RGCN:
 
         self.auc_val, self.auc_update_op = tf.metrics.auc(
             labels=self.labels if self.return_label else tf.reshape(self.labels, [-1]),
-            predictions=self.prediction[:, 1] if self.return_label else tf.reshape(self.prediction[:, 1], [-1]),
+            predictions=self.prediction[:, 1] if self.return_label else tf.reshape(self.prediction[:, :, 1], [-1]),
         )
 
         self.inference_prediction = tf.nn.softmax(self.inference_output)
@@ -360,7 +360,7 @@ class RGCN:
         self.inference_auc_val, self.inference_auc_update_op = tf.metrics.auc(
             labels=self.labels if self.return_label else tf.reshape(self.labels, [-1]),
             predictions=self.inference_prediction[:, 1] if self.return_label else tf.reshape(
-                self.inference_prediction[:, 1], [-1]),
+                self.inference_prediction[:, :, 1], [-1]),
         )
 
         # self.acc_val, self.acc_update_op = tf.metrics.accuracy(
@@ -403,7 +403,12 @@ class RGCN:
         node_tensor, adj_mat = X
         if dev_data is None or dev_targets is None:
             # split validation set
-            pos_idx, neg_idx = np.where(y == 1)[0], np.where(y == 0)[0]
+            if self.return_label:
+                pos_idx, neg_idx = np.where(y == 1)[0], np.where(y == 0)[0]
+            else:
+                pos_idx, neg_idx = np.where(np.count_nonzero(y, axis=-1) > 0)[0], \
+                                   np.where(np.count_nonzero(y, axis=-1) == 0)[0]
+
             dev_idx = np.array(list(np.random.choice(pos_idx, int(len(pos_idx) * 0.1), False)) + \
                                list(np.random.choice(neg_idx, int(len(neg_idx) * 0.1), False)))
             train_idx = np.delete(np.arange(len(y)), dev_idx)
@@ -439,7 +444,8 @@ class RGCN:
             node_tensor = node_tensor[permute]
             adj_mat = adj_mat[permute]
             y = y[permute]
-            for i in range(iters_per_epoch):
+            from tqdm import tqdm
+            for i in tqdm(range(iters_per_epoch)):
                 _node_tensor, _adj_mat, _labels \
                     = node_tensor[i * batch_size: (i + 1) * batch_size], \
                       adj_mat[i * batch_size: (i + 1) * batch_size], \

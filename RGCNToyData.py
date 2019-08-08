@@ -1,5 +1,4 @@
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import shutil
 import inspect
 import datetime
@@ -7,6 +6,7 @@ import tensorflow as tf
 import lib.plot, lib.dataloader, lib.rgcn_utils, lib.ops.LSTM
 from Model.RGCN import RGCN
 
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.FATAL)
 tf.app.flags.DEFINE_string('output_dir', '', '')
 tf.app.flags.DEFINE_integer('epochs', 100, '')
 tf.app.flags.DEFINE_integer('nb_gpus', 1, '')
@@ -67,7 +67,6 @@ if __name__ == "__main__":
 
     dataset = lib.dataloader.load_toy_data(FLAGS.load_hairpin, FLAGS.return_label,
                                            element_symbol=FLAGS.element_symbol)
-    print('mark')
     model = RGCN(MAX_LEN, dataset['VOCAB_VEC'].shape[1], len(lib.dataloader.BOND_TYPE),
                  dataset['VOCAB_VEC'], DEVICES, FLAGS.return_label, **hp)
 
