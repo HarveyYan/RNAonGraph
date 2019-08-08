@@ -275,6 +275,10 @@ def generate_element_dataset(n, length, element_symbol, p=None, return_label=Tru
 
 if __name__ == "__main__":
     # annotation for the multiloop elements
-    all_seqs, adjacency_matrix, all_labels, _ = generate_element_dataset(80000, 101, 'm', return_label=False)
+    all_seqs, adjacency_matrix, all_labels, _ = generate_element_dataset(80000, 101, 'i', return_label=False)
     print(all_labels.shape)
     print(np.where(np.count_nonzero(all_labels, axis=-1) > 0)[0].__len__())
+
+    # all_seqs, adjacency_matrix, all_labels, _ = generate_hairpin_dataset(80000, 101, 'm', return_label=False)
+    # print(all_labels.shape)
+    # print(np.where(np.count_nonzero(all_labels, axis=-1) > 0)[0].__len__())

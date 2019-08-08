@@ -1,7 +1,6 @@
-import locale
 import functools
 import tensorflow as tf
-import lib.ops.Conv1D, lib.ops.Linear, lib.ops.BatchNorm, lib.ops.LSTM
+import lib.ops.Conv1D, lib.ops.Linear, lib.ops.LSTM
 
 
 def ConvMeanPool(name, input_dim, output_dim, filter_size, inputs, he_init=True, biases=True, pooling_size=2):

@@ -9,17 +9,21 @@ sys.path.append(basedir)
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import lib.plot, lib.logger, lib.clr
-import lib.ops.LSTM, lib.ops.Linear
+import lib.ops.LSTM, lib.ops.Linear, lib.ops.Conv1D
 from lib.resutils import normalize
 
 
 class RNATracker:
 
-    def __init__(self, max_len, node_dim, edge_dim, gpu_device_list=['/gpu:0'], **kwargs):
+    def __init__(self, max_len, node_dim, edge_dim, embedding_vec, gpu_device_list=['/gpu:0'], return_label=True,
+                 **kwargs):
         self.max_len = max_len
         self.node_dim = node_dim
         self.edge_dim = edge_dim
+        self.embedding_vec = embedding_vec
+        self.vocab_size = embedding_vec.shape[0]
         self.gpu_device_list = gpu_device_list
+        self.return_label = return_label
 
         # hyperparams
         self.units = kwargs.get('units', 128)
@@ -33,17 +37,18 @@ class RNATracker:
 
         self.g = tf.get_default_graph()
         with self.g.as_default():
-            self._placeholders()
-            if self.use_momentum:
-                self.optimizer = tf.contrib.opt.MomentumWOptimizer(
-                    1e-4, self.learning_rate * self.lr_multiplier,
-                    0.9, use_nesterov=True
-                )
-            else:
-                self.optimizer = tf.contrib.opt.AdamWOptimizer(
-                    1e-4,
-                    learning_rate=self.learning_rate * self.lr_multiplier
-                )
+            with tf.device('/cpu:0'):
+                self._placeholders()
+                if self.use_momentum:
+                    self.optimizer = tf.contrib.opt.MomentumWOptimizer(
+                        1e-4, self.learning_rate * self.lr_multiplier,
+                        0.9, use_nesterov=True
+                    )
+                else:
+                    self.optimizer = tf.contrib.opt.AdamWOptimizer(
+                        1e-4,
+                        learning_rate=self.learning_rate * self.lr_multiplier
+                    )
 
             for i, device in enumerate(self.gpu_device_list):
                 with tf.device(device), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
@@ -54,22 +59,24 @@ class RNATracker:
             with tf.device('/cpu:0'), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
                 self._build_rnatracker(None, mode='inference')
 
-            self._merge()
-            self.train_op = self.optimizer.apply_gradients(self.gv)
-            _stats('RNATracker', self.gv)
-            self.saver = tf.train.Saver(max_to_keep=1000)
-            self.init = tf.global_variables_initializer()
-            self.local_init = tf.local_variables_initializer()
+                self._merge()
+                self.train_op = self.optimizer.apply_gradients(self.gv)
+                _stats('RNATracker', self.gv)
+                self.saver = tf.train.Saver(max_to_keep=1000)
+                self.init = tf.global_variables_initializer()
+                self.local_init = tf.local_variables_initializer()
         self._init_session()
 
     def _placeholders(self):
         self.node_input_ph = tf.placeholder(tf.int32, shape=[None, self.max_len])
-        self.node_input_splits = tf.split(tf.one_hot(self.node_input_ph, self.node_dim), len(self.gpu_device_list))
+        self.node_input_splits = tf.split(self.node_input_ph, len(self.gpu_device_list))
 
         self.inference_node_ph = tf.placeholder(tf.int32, shape=[None, self.max_len])
-        self.inference_node = tf.one_hot(self.inference_node_ph, self.node_dim)
 
-        self.labels = tf.placeholder(tf.int32, shape=[None])  # binary
+        if self.return_label:
+            self.labels = tf.placeholder(tf.int32, shape=[None])  # binary
+        else:
+            self.labels = tf.placeholder(tf.int32, shape=[None, self.max_len])
         self.labels_split = tf.split(self.labels, len(self.gpu_device_list))
 
         self.is_training_ph = tf.placeholder(tf.bool, ())
@@ -85,26 +92,31 @@ class RNATracker:
         if mode == 'training':
             node_tensor = self.node_input_splits[split_idx]
         elif mode == 'inference':
-            node_tensor = self.inference_node
+            node_tensor = self.inference_node_ph
         else:
             raise ValueError('unknown mode')
 
+        embedding = tf.get_variable('embedding_layer', shape=(self.vocab_size, self.node_dim),
+                                    initializer=tf.constant_initializer(self.embedding_vec), trainable=False)
+        node_tensor = tf.nn.embedding_lookup(embedding, node_tensor)
+
         with tf.variable_scope('seq_scan'):
-            output = tf.layers.conv1d(node_tensor, self.units, 10, padding='same', use_bias=False, name='conv1')
-            output = tf.nn.relu(output)
+            output = lib.ops.Conv1D.conv1d('conv1', self.node_dim, self.units, 10, node_tensor, biases=False)
             output = normalize('bn1', output, self.is_training_ph, self.use_bn)
-            output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
-
-            output = tf.layers.conv1d(output, self.units, 10, padding='same', use_bias=False, name='conv2')
             output = tf.nn.relu(output)
-            output = normalize('bn2', output, self.is_training_ph, self.use_bn)
             output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
 
-        with tf.variable_scope('set2set_pooling'):
-            output = lib.ops.LSTM.set2set_pooling('set2set_pooling', output, self.pool_steps, self.dropout_rate,
-                                                  self.is_training_ph, self.lstm_encoder)
-            output = lib.ops.Linear.linear('OutputMapping', output.get_shape().as_list()[-1], 2,
-                                           output)  # categorical logits
+            output = lib.ops.Conv1D.conv1d('conv2', self.units, self.units, 10, output, biases=False)
+            output = normalize('bn2', output, self.is_training_ph, self.use_bn)
+            output = tf.nn.relu(output)
+            output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
+
+        if self.return_label:
+            with tf.variable_scope('set2set_pooling'):
+                output = lib.ops.LSTM.set2set_pooling('set2set_pooling', output, self.pool_steps, self.dropout_rate,
+                                                      self.is_training_ph, self.lstm_encoder)
+        output = lib.ops.Linear.linear('OutputMapping', output.get_shape().as_list()[-1], 2,
+                                       output)  # categorical logits
 
         if mode == 'training':
             if not hasattr(self, 'output'):
@@ -118,9 +130,9 @@ class RNATracker:
         prediction = tf.nn.softmax(self.output[split_idx])
 
         cost = tf.reduce_mean(
-            tf.nn.sparse_softmax_cross_entropy_with_logits(
+            tf.nn.softmax_cross_entropy_with_logits(
                 logits=self.output[split_idx],
-                labels=self.labels_split[split_idx],
+                labels=tf.one_hot(self.labels_split[split_idx], depth=2),
             ))
 
         if not hasattr(self, 'cost'):
@@ -131,7 +143,8 @@ class RNATracker:
 
     def _train(self, split_idx):
         gv = self.optimizer.compute_gradients(self.cost[split_idx],
-                                              var_list=[var for var in tf.trainable_variables()])
+                                              var_list=[var for var in tf.trainable_variables()],
+                                              colocate_gradients_with_ops=True)
 
         if not hasattr(self, 'gv'):
             self.gv = [gv]
@@ -145,25 +158,48 @@ class RNATracker:
         self.cost = tf.add_n(self.cost) / len(self.gpu_device_list)
         self.gv = _average_gradients(self.gv)
 
-        self.acc_val, self.acc_update_op = tf.metrics.accuracy(
-            labels=self.labels,
-            predictions=tf.argmax(self.prediction, axis=-1),
-        )
+        if self.return_label:
+            self.acc_val, self.acc_update_op = tf.metrics.accuracy(
+                labels=self.labels,
+                predictions=tf.argmax(self.prediction, axis=-1),
+            )
+        else:
+            self.acc_val, self.acc_update_op = tf.metrics.accuracy(
+                labels=tf.ones(tf.shape(self.prediction)[0]),
+                predictions=tf.reduce_prod(
+                    tf.cast(
+                        tf.equal(
+                            tf.to_int32(tf.argmax(self.prediction, axis=-1)),
+                            self.labels
+                        ), tf.float32), axis=-1)
+            )
 
         self.auc_val, self.auc_update_op = tf.metrics.auc(
-            labels=self.labels,
-            predictions=self.prediction[:, 1],
+            labels=self.labels if self.return_label else tf.reshape(self.labels, [-1]),
+            predictions=self.prediction[:, 1] if self.return_label else tf.reshape(self.prediction[:, :, 1], [-1]),
         )
 
         self.inference_prediction = tf.nn.softmax(self.inference_output)
-        self.inference_acc_val, self.inference_acc_update_op = tf.metrics.accuracy(
-            labels=self.labels,
-            predictions=tf.argmax(self.inference_prediction, axis=-1),
-        )
+        if self.return_label:
+            self.inference_acc_val, self.inference_acc_update_op = tf.metrics.accuracy(
+                labels=self.labels,
+                predictions=tf.argmax(self.inference_prediction, axis=-1),
+            )
+        else:
+            self.inference_acc_val, self.inference_acc_update_op = tf.metrics.accuracy(
+                labels=tf.ones(tf.shape(self.prediction)[0]),
+                predictions=tf.reduce_prod(
+                    tf.cast(
+                        tf.equal(
+                            tf.to_int32(tf.argmax(self.inference_prediction, axis=-1)),
+                            self.labels
+                        ), tf.float32), axis=-1),
+            )
 
         self.inference_auc_val, self.inference_auc_update_op = tf.metrics.auc(
-            labels=self.labels,
-            predictions=self.inference_prediction[:, 1],
+            labels=self.labels if self.return_label else tf.reshape(self.labels, [-1]),
+            predictions=self.inference_prediction[:, 1] if self.return_label else tf.reshape(
+                self.inference_prediction[:, :, 1], [-1]),
         )
 
     def _init_session(self):
@@ -189,7 +225,11 @@ class RNATracker:
         node_tensor = X
         if dev_data is None or dev_targets is None:
             # split validation set
-            pos_idx, neg_idx = np.where(y == 1)[0], np.where(y == 0)[0]
+            if self.return_label:
+                pos_idx, neg_idx = np.where(y == 1)[0], np.where(y == 0)[0]
+            else:
+                pos_idx, neg_idx = np.where(np.count_nonzero(y, axis=-1) > 0)[0], \
+                                   np.where(np.count_nonzero(y, axis=-1) == 0)[0]
             dev_idx = np.array(list(np.random.choice(pos_idx, int(len(pos_idx) * 0.1), False)) + \
                                list(np.random.choice(neg_idx, int(len(neg_idx) * 0.1), False)))
             train_idx = np.delete(np.arange(len(y)), dev_idx)

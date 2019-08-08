@@ -348,7 +348,7 @@ class RGCN:
             )
         else:
             self.inference_acc_val, self.inference_acc_update_op = tf.metrics.accuracy(
-                labels=tf.ones(tf.shape(self.prediction)[0]),
+                labels=tf.ones(tf.shape(self.inference_prediction)[0]),
                 predictions=tf.reduce_prod(
                     tf.cast(
                         tf.equal(
@@ -444,8 +444,7 @@ class RGCN:
             node_tensor = node_tensor[permute]
             adj_mat = adj_mat[permute]
             y = y[permute]
-            from tqdm import tqdm
-            for i in tqdm(range(iters_per_epoch)):
+            for i in range(iters_per_epoch):
                 _node_tensor, _adj_mat, _labels \
                     = node_tensor[i * batch_size: (i + 1) * batch_size], \
                       adj_mat[i * batch_size: (i + 1) * batch_size], \
@@ -530,7 +529,7 @@ class RGCN:
                 self.inference_adj_mat_ph: _adj_mat,
                 self.is_training_ph: False
             }
-            feed_tensor = [self.inference_output]
+            feed_tensor = [self.inference_prediction]
             if y is not None:
                 _labels = y[i * batch_size:(i + 1) * batch_size]
                 feed_dict[self.labels] = _labels
