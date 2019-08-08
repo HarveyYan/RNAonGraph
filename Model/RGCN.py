@@ -15,13 +15,15 @@ import lib.ops.LSTM, lib.ops.Linear, lib.ops.Conv1D
 
 class RGCN:
 
-    def __init__(self, max_len, node_dim, edge_dim, embedding_vec, gpu_device_list=['/gpu:0'], **kwargs):
+    def __init__(self, max_len, node_dim, edge_dim, embedding_vec, gpu_device_list=['/gpu:0'], return_label=True,
+                 **kwargs):
         self.max_len = max_len
         self.node_dim = node_dim
         self.edge_dim = edge_dim
         self.embedding_vec = embedding_vec
         self.vocab_size = embedding_vec.shape[0]
         self.gpu_device_list = gpu_device_list
+        self.return_label = return_label
 
         # hyperparams
         self.units = kwargs.get('units', 32)
@@ -89,7 +91,10 @@ class RGCN:
         self.inference_adj_mat_ph = tf.placeholder(tf.int32, shape=[None, self.max_len, self.max_len])
         self.inference_adj_mat = tf.one_hot(self.inference_adj_mat_ph, self.edge_dim)
 
-        self.labels = tf.placeholder(tf.int32, shape=[None])  # binary
+        if self.return_label:
+            self.labels = tf.placeholder(tf.int32, shape=[None])  # binary
+        else:
+            self.labels = tf.placeholder(tf.int32, shape=[None, self.max_len])
         self.labels_split = tf.split(self.labels, len(self.gpu_device_list))
 
         self.is_training_ph = tf.placeholder(tf.bool, ())
@@ -141,22 +146,25 @@ class RGCN:
             # [batch_size, length, u]
 
         output = tf.concat([hidden_tensor, node_tensor], axis=-1)
-        with tf.variable_scope('seq_scan'):
-            output = lib.ops.Conv1D.conv1d('conv1', self.units*2, self.units, 10, output, biases=False)
-            output = normalize('bn1', output, self.use_bn, self.is_training_ph)
-            output = tf.nn.relu(output)
-            output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
 
-            output = lib.ops.Conv1D.conv1d('conv2', self.units, self.units, 10, output, biases=False)
-            output = normalize('bn2', output, self.use_bn, self.is_training_ph)
-            output = tf.nn.relu(output)
-            output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
+        if self.return_label:
+            with tf.variable_scope('seq_scan'):
+                output = lib.ops.Conv1D.conv1d('conv1', self.units * 2, self.units, 10, output, biases=False)
+                output = normalize('bn1', output, self.use_bn, self.is_training_ph)
+                output = tf.nn.relu(output)
+                output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
 
-        with tf.variable_scope('set2set_pooling'):
-            output = lib.ops.LSTM.set2set_pooling('set2set_pooling', output, self.pool_steps, self.dropout_rate,
-                                                  self.is_training_ph, self.lstm_encoder)
-            output = lib.ops.Linear.linear('OutputMapping', output.get_shape().as_list()[-1], 2,
-                                           output)  # categorical logits
+                output = lib.ops.Conv1D.conv1d('conv2', self.units, self.units, 10, output, biases=False)
+                output = normalize('bn2', output, self.use_bn, self.is_training_ph)
+                output = tf.nn.relu(output)
+                output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
+
+            with tf.variable_scope('set2set_pooling'):
+                output = lib.ops.LSTM.set2set_pooling('set2set_pooling', output, self.pool_steps, self.dropout_rate,
+                                                      self.is_training_ph, self.lstm_encoder)
+
+        output = lib.ops.Linear.linear('OutputMapping', output.get_shape().as_list()[-1], 2,
+                                       output)  # categorical logits
 
         if mode == 'training':
             if not hasattr(self, 'output'):
@@ -234,22 +242,25 @@ class RGCN:
                 # [batch_size, length, u]
 
         output = tf.concat([hidden_tensor, node_tensor], axis=-1)
-        with tf.variable_scope('seq_scan'):
-            output = lib.ops.Conv1D.conv1d('conv1', self.units * 2, self.units, 10, output, biases=False)
-            output = normalize('bn1', output, self.use_bn, self.is_training_ph)
-            output = tf.nn.relu(output)
-            output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
 
-            output = lib.ops.Conv1D.conv1d('conv2', self.units, self.units, 10, output, biases=False)
-            output = normalize('bn2', output, self.use_bn, self.is_training_ph)
-            output = tf.nn.relu(output)
-            output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
+        if self.return_label:
+            with tf.variable_scope('seq_scan'):
+                output = lib.ops.Conv1D.conv1d('conv1', self.units * 2, self.units, 10, output, biases=False)
+                output = normalize('bn1', output, self.use_bn, self.is_training_ph)
+                output = tf.nn.relu(output)
+                output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
 
-        with tf.variable_scope('set2set_pooling'):
-            output = lib.ops.LSTM.set2set_pooling('set2set_pooling', output, self.pool_steps, self.dropout_rate,
-                                                  self.is_training_ph, self.lstm_encoder)
-            output = lib.ops.Linear.linear('OutputMapping', output.get_shape().as_list()[-1], 2,
-                                           output)  # categorical logits
+                output = lib.ops.Conv1D.conv1d('conv2', self.units, self.units, 10, output, biases=False)
+                output = normalize('bn2', output, self.use_bn, self.is_training_ph)
+                output = tf.nn.relu(output)
+                output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
+
+            with tf.variable_scope('set2set_pooling'):
+                output = lib.ops.LSTM.set2set_pooling('set2set_pooling', output, self.pool_steps, self.dropout_rate,
+                                                      self.is_training_ph, self.lstm_encoder)
+
+        output = lib.ops.Linear.linear('OutputMapping', output.get_shape().as_list()[-1], 2,
+                                       output)  # categorical logits
 
         # with tf.variable_scope('graph_aggregration'):
         #     gated_outputs = tf.nn.sigmoid(
@@ -308,25 +319,48 @@ class RGCN:
         self.cost = tf.add_n(self.cost) / len(self.gpu_device_list)
         self.gv = _average_gradients(self.gv)
 
-        self.acc_val, self.acc_update_op = tf.metrics.accuracy(
-            labels=self.labels,
-            predictions=tf.argmax(self.prediction, axis=-1),
-        )
+        if self.return_label:
+            self.acc_val, self.acc_update_op = tf.metrics.accuracy(
+                labels=self.labels,
+                predictions=tf.argmax(self.prediction, axis=-1),
+            )
+        else:
+            self.acc_val, self.acc_update_op = tf.metrics.accuracy(
+                labels=tf.ones(tf.shape(self.prediction)[0]),
+                predictions=tf.reduce_prod(
+                    tf.cast(
+                        tf.equal(
+                            tf.to_int32(tf.argmax(self.prediction, axis=-1)),
+                            self.labels
+                        ), tf.float32), axis=-1)
+            )
 
         self.auc_val, self.auc_update_op = tf.metrics.auc(
-            labels=self.labels,
-            predictions=self.prediction[:, 1],
+            labels=self.labels if self.return_label else tf.reshape(self.labels, [-1]),
+            predictions=self.prediction[:, 1] if self.return_label else tf.reshape(self.prediction[:, 1], [-1]),
         )
 
         self.inference_prediction = tf.nn.softmax(self.inference_output)
-        self.inference_acc_val, self.inference_acc_update_op = tf.metrics.accuracy(
-            labels=self.labels,
-            predictions=tf.argmax(self.inference_prediction, axis=-1),
-        )
+        if self.return_label:
+            self.inference_acc_val, self.inference_acc_update_op = tf.metrics.accuracy(
+                labels=self.labels,
+                predictions=tf.argmax(self.inference_prediction, axis=-1),
+            )
+        else:
+            self.inference_acc_val, self.inference_acc_update_op = tf.metrics.accuracy(
+                labels=tf.ones(tf.shape(self.prediction)[0]),
+                predictions=tf.reduce_prod(
+                    tf.cast(
+                        tf.equal(
+                            tf.to_int32(tf.argmax(self.inference_prediction, axis=-1)),
+                            self.labels
+                        ), tf.float32), axis=-1),
+            )
 
         self.inference_auc_val, self.inference_auc_update_op = tf.metrics.auc(
-            labels=self.labels,
-            predictions=self.inference_prediction[:, 1],
+            labels=self.labels if self.return_label else tf.reshape(self.labels, [-1]),
+            predictions=self.inference_prediction[:, 1] if self.return_label else tf.reshape(
+                self.inference_prediction[:, 1], [-1]),
         )
 
         # self.acc_val, self.acc_update_op = tf.metrics.accuracy(
@@ -410,17 +444,16 @@ class RGCN:
                     = node_tensor[i * batch_size: (i + 1) * batch_size], \
                       adj_mat[i * batch_size: (i + 1) * batch_size], \
                       y[i * batch_size: (i + 1) * batch_size]
-                try:
-                    self.sess.run(self.train_op,
-                                  feed_dict={self.node_input_ph: _node_tensor,
-                                             self.adj_mat_ph: _adj_mat,
-                                             self.labels: _labels,
-                                             self.global_step: i,
-                                             self.hf_iters_per_epoch: iters_per_epoch // 2,
-                                             self.is_training_ph: True}
-                                  )
-                except Exception as e:
-                    print(e)
+
+                self.sess.run(self.train_op,
+                              feed_dict={self.node_input_ph: _node_tensor,
+                                         self.adj_mat_ph: _adj_mat,
+                                         self.labels: _labels,
+                                         self.global_step: i,
+                                         self.hf_iters_per_epoch: iters_per_epoch // 2,
+                                         self.is_training_ph: True}
+                              )
+
             train_cost, train_acc, train_auc = \
                 self.evaluate((node_tensor, adj_mat), y, batch_size)
             lib.plot.plot('train_cost', train_cost)

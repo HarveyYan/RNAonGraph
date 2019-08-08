@@ -120,8 +120,7 @@ def pretrain_word2vec(seqs, kmer_len, window, embedding_size, save_path):
     model.save(save_path)
 
 
-
-def load_toy_data(p=None):
+def load_toy_data(load_hairpin, return_label, p=None, element_symbol='m'):
     if p is None:
         pool = Pool(8)
     else:
@@ -129,10 +128,20 @@ def load_toy_data(p=None):
 
     dataset = {}
 
-    all_seq, adjacency_matrix, all_labels = lib.rna_utils.generate_toy_dataset(80000, 101, pool)
+    if load_hairpin:
+        all_seq, adjacency_matrix, all_labels, all_struct = lib.rna_utils.\
+            generate_hairpin_dataset(80000, 101, pool, return_label)
+    else:
+        all_seq, adjacency_matrix, all_labels, all_struct = lib.rna_utils.\
+            generate_element_dataset(80000, 101, element_symbol, pool, return_label)
 
-    pos_idx = np.where(all_labels == 1)[0]
-    neg_idx = np.where(all_labels == 0)[0]
+    if return_label:
+        pos_idx = np.where(all_labels == 1)[0]
+        neg_idx = np.where(all_labels == 0)[0]
+    else:
+        pos_idx = np.where(np.count_nonzero(all_labels, axis=-1) > 0)[0]
+        neg_idx = np.where(np.count_nonzero(all_labels, axis=-1) == 0)[0]
+
     all_idx = np.concatenate([pos_idx,
                               neg_idx[np.random.permutation(len(neg_idx))[:2 * len(pos_idx)]]], axis=0)
     size = len(all_idx)
@@ -149,6 +158,9 @@ def load_toy_data(p=None):
     dataset['train_label'] = all_labels[int(0.1 * size):]
     dataset['train_seq'] = all_seq[int(0.1 * size):]
     dataset['train_adj_mat'] = adjacency_matrix[int(0.1 * size):]
+
+    dataset['VOCAB'] = 'ACGT'
+    dataset['VOCAB_VEC'] = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]).astype(np.float32)
 
     if p is None:
         pool.close()

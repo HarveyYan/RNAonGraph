@@ -151,6 +151,7 @@ def generate_hairpin_dataset(n, length, p=None, return_label=True):
             os.path.exists(os.path.join(data_path, 'adj_mat.obj')):
         all_labels = []
         all_seqs = []
+        all_struct = []
         with open(os.path.join(data_path, 'seq-and-struct.fa'), 'r') as file:
             for line in file:
                 if line[0] == '>':
@@ -161,6 +162,8 @@ def generate_hairpin_dataset(n, length, p=None, return_label=True):
                         all_labels.append([int(c) for c in label.split(',')])
                 elif line[0] in 'ACGT':
                     all_seqs.append(['ACGT'.index(c) for c in line.rstrip()])
+                elif line[0] in '.()':
+                    all_struct.append(['.()'.index(c) for c in line.rstrip()])
 
         all_seqs = np.array(all_seqs)
         sp_adj_matrix = pickle.load(open(os.path.join(data_path, 'adj_mat.obj'), 'rb'))
@@ -179,12 +182,14 @@ def generate_hairpin_dataset(n, length, p=None, return_label=True):
 
         sp_adj_matrix = []
         all_labels = []
+        all_struct = []
         with open(os.path.join(data_path, 'seq-and-struct.fa'), 'w') as file:
             for seq, (struct, mat, label) in zip(seqs_str, res):
                 file.writelines('> label:%s\n%s\n%s\n' %
                                 (label if return_label else ','.join([str(c) for c in label]), seq, struct))
                 sp_adj_matrix.append(mat)
                 all_labels.append(label)
+                all_struct.append(['.()'.index(c) for c in struct])
 
         pickle.dump(sp_adj_matrix, open(os.path.join(data_path, 'adj_mat.obj'), 'wb'))
         if p is None:
@@ -193,7 +198,8 @@ def generate_hairpin_dataset(n, length, p=None, return_label=True):
 
     all_labels = np.array(all_labels)
     adjacency_matrix = np.stack([mat.toarray() for mat in sp_adj_matrix], axis=0)
-    return all_seqs, adjacency_matrix, all_labels
+    all_struct = np.array(all_struct)
+    return all_seqs, adjacency_matrix, all_labels, all_struct
 
 
 def generate_element_dataset(n, length, element_symbol, p=None, return_label=True):
@@ -214,6 +220,7 @@ def generate_element_dataset(n, length, element_symbol, p=None, return_label=Tru
             os.path.exists(os.path.join(data_path, 'adj_mat.obj')):
         all_labels = []
         all_seqs = []
+        all_struct = []
         with open(os.path.join(data_path, 'seq-and-struct.fa'), 'r') as file:
             for line in file:
                 if line[0] == '>':
@@ -224,6 +231,8 @@ def generate_element_dataset(n, length, element_symbol, p=None, return_label=Tru
                         all_labels.append([int(c) for c in label.split(',')])
                 elif line[0] in 'ACGT':
                     all_seqs.append(['ACGT'.index(c) for c in line.rstrip()])
+                elif line[0] in '.()':
+                    all_struct.append(['.()'.index(c) for c in line.rstrip()])
 
         all_seqs = np.array(all_seqs)
         sp_adj_matrix = pickle.load(open(os.path.join(data_path, 'adj_mat.obj'), 'rb'))
@@ -244,12 +253,14 @@ def generate_element_dataset(n, length, element_symbol, p=None, return_label=Tru
 
         sp_adj_matrix = []
         all_labels = []
+        all_struct = []
         with open(os.path.join(data_path, 'seq-and-struct.fa'), 'w') as file:
             for seq, (struct, mat, label) in zip(seqs_str, res):
                 file.writelines('> label:%s\n%s\n%s\n' %
                                 (label if return_label else ','.join([str(c) for c in label]), seq, struct))
                 sp_adj_matrix.append(mat)
                 all_labels.append(label)
+                all_struct.append(['.()'.index(c) for c in struct])
 
         pickle.dump(sp_adj_matrix, open(os.path.join(data_path, 'adj_mat.obj'), 'wb'))
         if p is None:
@@ -258,10 +269,12 @@ def generate_element_dataset(n, length, element_symbol, p=None, return_label=Tru
 
     all_labels = np.array(all_labels)
     adjacency_matrix = np.stack([mat.toarray() for mat in sp_adj_matrix], axis=0)
-    return all_seqs, adjacency_matrix, all_labels
+    all_struct = np.array(all_struct)
+    return all_seqs, adjacency_matrix, all_labels, all_struct
 
 
 if __name__ == "__main__":
     # annotation for the multiloop elements
-    all_seqs, adjacency_matrix, all_labels = generate_element_dataset(80000, 101, 'm', return_label=False)
-    print(np.where(all_labels == 1)[0].__len__())
+    all_seqs, adjacency_matrix, all_labels, _ = generate_element_dataset(80000, 101, 'm', return_label=False)
+    print(all_labels.shape)
+    print(np.where(np.count_nonzero(all_labels, axis=-1) > 0)[0].__len__())
