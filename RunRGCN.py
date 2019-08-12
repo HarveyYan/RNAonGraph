@@ -11,7 +11,7 @@ import lib.plot, lib.dataloader, lib.rgcn_utils, lib.logger, lib.ops.LSTM
 from lib.general_utils import Pool
 from Model.RGCN import RGCN
 
-tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.FATAL)
+tf.logging.set_verbosity(tf.logging.FATAL)
 tf.app.flags.DEFINE_string('output_dir', '', '')
 tf.app.flags.DEFINE_integer('epochs', 100, '')
 tf.app.flags.DEFINE_integer('nb_gpus', 1, '')
@@ -22,12 +22,13 @@ tf.app.flags.DEFINE_bool('use_attention', False, '')
 tf.app.flags.DEFINE_bool('expr_simplified_attention', False, '')
 tf.app.flags.DEFINE_bool('lstm_ggnn', False, '')
 tf.app.flags.DEFINE_bool('use_embedding', False, '')
+tf.app.flags.DEFINE_bool('augment_features', False, '')
 FLAGS = tf.app.flags.FLAGS
 
 BATCH_SIZE = 200  # * FLAGS.nb_gpus if FLAGS.nb_gpus > 0 else 200
 EPOCHS = FLAGS.epochs  # How many iterations to train for
 DEVICES = ['/gpu:%d' % (i) for i in range(FLAGS.nb_gpus)] if FLAGS.nb_gpus > 0 else ['/cpu:0']
-RBP_LIST = lib.dataloader.all_rbps
+RBP_LIST = ['1_PARCLIP_AGO1234_hg19'] # lib.dataloader.all_rbps
 MAX_LEN = 101
 
 hp = {
@@ -43,6 +44,7 @@ hp = {
     'test_gated_nn': True,
     'expr_simplified_attention': FLAGS.expr_simplified_attention,
     'lstm_ggnn': FLAGS.lstm_ggnn,
+    'augment_features': FLAGS.augment_features,
 }
 
 
@@ -67,11 +69,12 @@ def run_one_rbp(idx, q):
 
     print('training', RBP_LIST[idx])
     dataset = lib.dataloader.load_clip_seq([rbp], use_embedding=FLAGS.use_embedding)[0]  # load one at a time
+    hp['features_dim'] = dataset['train_features'].shape[-1]
     model = RGCN(MAX_LEN, dataset['VOCAB_VEC'].shape[1], len(lib.dataloader.BOND_TYPE),
                  dataset['VOCAB_VEC'], DEVICES, **hp)
-    model.fit((dataset['train_seq'], dataset['train_adj_mat']), dataset['train_label'],
+    model.fit((dataset['train_seq'], dataset['train_adj_mat'], dataset['train_features']), dataset['train_label'],
               EPOCHS, BATCH_SIZE, rbp_output, logging=True)
-    all_prediction, acc, auc = model.predict((dataset['test_seq'], dataset['test_adj_mat']),
+    all_prediction, acc, auc = model.predict((dataset['test_seq'], dataset['test_adj_mat'], dataset['test_features']),
                                              BATCH_SIZE, y=dataset['test_label'])
     print('Evaluation on held-out test set, acc: %.3f, auc: %.3f' % (acc, auc))
     model.delete()

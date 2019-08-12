@@ -2,7 +2,7 @@ import tensorflow as tf
 import numpy as np
 
 
-def conv1d(name, input_dim, output_dim, filter_size, inputs, stride=1, he_init=True, biases=True):
+def conv1d(name, input_dim, output_dim, filter_size, inputs, stride=1, he_init=True, biases=True, dilation=1):
     with tf.variable_scope(name):
         # ignoring mask_type from original code
 
@@ -36,7 +36,8 @@ def conv1d(name, input_dim, output_dim, filter_size, inputs, stride=1, he_init=T
             value=inputs,
             filters=filters,
             stride=stride,
-            padding='SAME'
+            padding='SAME',
+            # dilations=dilation
         )
 
         if biases:

@@ -48,10 +48,12 @@ def compare_two_csvs(path_to_csv_1, path_to_csv_2, experiment, axis_name_1, axis
     plt.xlabel(axis_name_1)
     plt.ylabel(axis_name_2)
     plt.scatter(file1['auc'], file2['auc'])
-    plt.savefig('../compare_csvs.png')
+    if not os.path.exists('../Graph'):
+        os.mkdir('../Graph')
+    plt.savefig('../Graph/%s.png'%(experiment))
 
 
 if __name__ == "__main__":
-    compare_two_csvs('../output/RGCN/20190805-212101-ggnn-attention-32-20-simplified/rbp-results.csv',
-                     '../output/RNATracker/20190705-141134-set2set-t10-128/rbp-results.csv',
-                     'RBP-31', 'GGNN-attention-32-20', 'RNATracker-best')
+    compare_two_csvs('../output/RGCN/20190807-195408-ggnn-attention-32-20-vanilla-attention/rbp-results.csv',
+                     '../output/RGCN/20190807-195921-ggnn-attention-32-20-simplified-embedding/rbp-results.csv',
+                     'attention-vs-simplified-embedding', 'GGNN-attention', 'GGNN-simplified-embedding')

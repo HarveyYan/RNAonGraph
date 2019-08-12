@@ -42,6 +42,10 @@ class RGCN:
         self.expr_simplified_attention = kwargs.get('expr_simplified_attention', False)
         self.lstm_ggnn = kwargs.get('lstm_ggnn', False)
 
+        # use additional node features
+        self.augment_features = kwargs.get('augment_features', False)
+        self.features_dim = kwargs.get('features_dim', 31)
+
         self.g = tf.Graph()
         with self.g.as_default():
             with tf.device('/cpu:0'):
@@ -84,10 +88,15 @@ class RGCN:
         self.node_input_ph = tf.placeholder(tf.int32, shape=[None, self.max_len])
         self.node_input_splits = tf.split(self.node_input_ph, len(self.gpu_device_list))
 
+        if self.augment_features:
+            self.features = tf.placeholder(tf.float32, shape=[None, self.max_len, self.features_dim])
+            self.features_splits = tf.split(self.features, len(self.gpu_device_list))
+
         self.adj_mat_ph = tf.placeholder(tf.int32, shape=[None, self.max_len, self.max_len])
         self.adj_mat_splits = tf.split(tf.one_hot(self.adj_mat_ph, self.edge_dim), len(self.gpu_device_list))
 
         self.inference_node_ph = tf.placeholder(tf.int32, shape=[None, self.max_len])
+        self.inference_features = tf.placeholder(tf.float32, shape=[None, self.max_len, self.features_dim])
         self.inference_adj_mat_ph = tf.placeholder(tf.int32, shape=[None, self.max_len, self.max_len])
         self.inference_adj_mat = tf.one_hot(self.inference_adj_mat_ph, self.edge_dim)
 
@@ -178,9 +187,13 @@ class RGCN:
         if mode == 'training':
             node_tensor = self.node_input_splits[split_idx]
             adj_tensor = self.adj_mat_splits[split_idx]
+            if self.augment_features:
+                features = self.features_splits[split_idx]
         elif mode == 'inference':
             node_tensor = self.inference_node_ph
             adj_tensor = self.inference_adj_mat
+            if self.augment_features:
+                features = self.inference_features
         else:
             raise ValueError('unknown mode')
 
@@ -189,11 +202,18 @@ class RGCN:
                                         initializer=tf.constant_initializer(self.embedding_vec), trainable=False)
 
         node_tensor = tf.nn.embedding_lookup(embedding, node_tensor)
+
+        if self.augment_features:
+            node_tensor = tf.concat([node_tensor, features], axis=-1)
+            input_dim = self.features_dim + self.node_dim
+        else:
+            input_dim = self.node_dim
+
         if self.reuse_weights:
-            if self.node_dim < self.units:
+            if input_dim < self.units:
                 node_tensor = tf.pad(node_tensor,
                                      [[0, 0], [0, 0], [0, self.units - self.node_dim]])
-            elif self.node_dim > self.units:
+            elif input_dim > self.units:
                 print('Changing \'self.units\' to %d!' % (self.node_dim))
                 self.units = self.node_dim
 
@@ -244,6 +264,8 @@ class RGCN:
         output = tf.concat([hidden_tensor, node_tensor], axis=-1)
 
         if self.return_label:
+            # globally pooling along the spatial axis of data,
+            # arriving at a single feature vector for the whole graph
             with tf.variable_scope('seq_scan'):
                 output = lib.ops.Conv1D.conv1d('conv1', self.units * 2, self.units, 10, output, biases=False)
                 output = normalize('bn1', output, self.use_bn, self.is_training_ph)
@@ -400,7 +422,7 @@ class RGCN:
     def fit(self, X, y, epochs, batch_size, output_dir, dev_data=None, dev_targets=None, logging=False):
         checkpoints_dir = os.path.join(output_dir, 'checkpoints/')
         os.makedirs(checkpoints_dir)
-        node_tensor, adj_mat = X
+        node_tensor, adj_mat, features = X
         if dev_data is None or dev_targets is None:
             # split validation set
             if self.return_label:
@@ -414,23 +436,27 @@ class RGCN:
             train_idx = np.delete(np.arange(len(y)), dev_idx)
             dev_node_tensor = node_tensor[dev_idx]
             dev_adj_mat = adj_mat[dev_idx]
+            dev_features = features[dev_idx]
             dev_targets = y[dev_idx]
 
             node_tensor = node_tensor[train_idx]
             adj_mat = adj_mat[train_idx]
+            features = features[train_idx]
             y = y[train_idx]
         else:
-            dev_node_tensor, dev_adj_mat = dev_data
+            dev_node_tensor, dev_adj_mat, dev_features = dev_data
         # batch size should be a multiple of len(self.gpu_device_list)
         dev_rmd = dev_node_tensor.shape[0] % len(self.gpu_device_list)
         if dev_rmd != 0:
             dev_node_tensor = dev_node_tensor[:-dev_rmd]
             dev_adj_mat = dev_adj_mat[:-dev_rmd]
+            dev_features = dev_features[:-dev_rmd]
             dev_targets = dev_targets[:-dev_rmd]
         train_rmd = node_tensor.shape[0] % len(self.gpu_device_list)
         if train_rmd != 0:
             node_tensor = node_tensor[:-train_rmd]
             adj_mat = adj_mat[:-train_rmd]
+            features = features[:-train_rmd]
             y = y[:-train_rmd]
         size_train = node_tensor.shape[0]
         iters_per_epoch = size_train // batch_size + (0 if size_train % batch_size == 0 else 1)
@@ -443,30 +469,36 @@ class RGCN:
             permute = np.random.permutation(size_train)
             node_tensor = node_tensor[permute]
             adj_mat = adj_mat[permute]
+            features = features[permute]
             y = y[permute]
             for i in range(iters_per_epoch):
-                _node_tensor, _adj_mat, _labels \
+                _node_tensor, _adj_mat, _features, _labels \
                     = node_tensor[i * batch_size: (i + 1) * batch_size], \
                       adj_mat[i * batch_size: (i + 1) * batch_size], \
+                      features[i * batch_size: (i + 1) * batch_size], \
                       y[i * batch_size: (i + 1) * batch_size]
 
-                self.sess.run(self.train_op,
-                              feed_dict={self.node_input_ph: _node_tensor,
-                                         self.adj_mat_ph: _adj_mat,
-                                         self.labels: _labels,
-                                         self.global_step: i,
-                                         self.hf_iters_per_epoch: iters_per_epoch // 2,
-                                         self.is_training_ph: True}
-                              )
+                feed_dict = {
+                    self.node_input_ph: _node_tensor,
+                    self.adj_mat_ph: _adj_mat,
+                    self.labels: _labels,
+                    self.global_step: i,
+                    self.hf_iters_per_epoch: iters_per_epoch // 2,
+                    self.is_training_ph: True
+                }
+                if self.augment_features:
+                    feed_dict[self.features] = _features
+
+                self.sess.run(self.train_op, feed_dict)
 
             train_cost, train_acc, train_auc = \
-                self.evaluate((node_tensor, adj_mat), y, batch_size)
+                self.evaluate((node_tensor, adj_mat, features), y, batch_size)
             lib.plot.plot('train_cost', train_cost)
             lib.plot.plot('train_acc', train_acc)
             lib.plot.plot('train_auc', train_auc)
 
             dev_cost, dev_acc, dev_auc = \
-                self.evaluate((dev_node_tensor, dev_adj_mat), dev_targets, batch_size)
+                self.evaluate((dev_node_tensor, dev_adj_mat, dev_features), dev_targets, batch_size)
             lib.plot.plot('dev_cost', dev_cost)
             lib.plot.plot('dev_acc', dev_acc)
             lib.plot.plot('dev_auc', dev_auc)
@@ -498,38 +530,44 @@ class RGCN:
             logger.close()
 
     def evaluate(self, X, y, batch_size):
-        node_tensor, adj_mat = X
+        node_tensor, adj_mat, features = X
         all_cost = 0.
         iters_per_epoch = len(node_tensor) // batch_size + (0 if len(node_tensor) % batch_size == 0 else 1)
         for i in range(iters_per_epoch):
-            _node_tensor, _adj_mat, _labels \
+            _node_tensor, _adj_mat, _features, _labels \
                 = node_tensor[i * batch_size: (i + 1) * batch_size], \
                   adj_mat[i * batch_size: (i + 1) * batch_size], \
+                  features[i * batch_size: (i + 1) * batch_size], \
                   y[i * batch_size: (i + 1) * batch_size]
-            cost, _, _ = self.sess.run([self.cost, self.acc_update_op, self.auc_update_op],
-                                       feed_dict={self.node_input_ph: _node_tensor,
-                                                  self.adj_mat_ph: _adj_mat,
-                                                  self.labels: _labels,
-                                                  self.is_training_ph: False}
-                                       )
+            feed_dict = {self.node_input_ph: _node_tensor,
+                         self.adj_mat_ph: _adj_mat,
+                         self.labels: _labels,
+                         self.is_training_ph: False}
+            if self.augment_features:
+                feed_dict[self.features] = _features
+            cost, _, _ = self.sess.run([self.cost, self.acc_update_op, self.auc_update_op], feed_dict)
             all_cost += cost * len(_node_tensor)
         acc, auc = self.sess.run([self.acc_val, self.auc_val])
         self.sess.run(self.local_init)
         return all_cost / len(node_tensor), acc, auc
 
     def predict(self, X, batch_size, y=None):
-        node_tensor, adj_mat = X
+        node_tensor, adj_mat, features = X
         all_predicton = []
         iters = len(node_tensor) // batch_size + (0 if len(node_tensor) % batch_size == 0 else 1)
         for i in range(iters):
-            _node_tensor, _adj_mat = node_tensor[i * batch_size:(i + 1) * batch_size], \
-                                     adj_mat[i * batch_size:(i + 1) * batch_size]
+            _node_tensor, _adj_mat, _features = node_tensor[i * batch_size:(i + 1) * batch_size], \
+                                                adj_mat[i * batch_size:(i + 1) * batch_size], \
+                                                features[i * batch_size:(i + 1) * batch_size]
+
             feed_dict = {
                 self.inference_node_ph: _node_tensor,
                 self.inference_adj_mat_ph: _adj_mat,
                 self.is_training_ph: False
             }
             feed_tensor = [self.inference_prediction]
+            if self.augment_features:
+                feed_dict[self.inference_features] = _features
             if y is not None:
                 _labels = y[i * batch_size:(i + 1) * batch_size]
                 feed_dict[self.labels] = _labels

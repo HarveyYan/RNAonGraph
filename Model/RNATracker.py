@@ -10,7 +10,6 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import lib.plot, lib.logger, lib.clr
 import lib.ops.LSTM, lib.ops.Linear, lib.ops.Conv1D
-from lib.resutils import normalize
 
 
 class RNATracker:
@@ -35,6 +34,10 @@ class RNATracker:
         self.use_momentum = kwargs.get('use_momentum', False)
         self.use_bn = kwargs.get('use_bn', False)
 
+        # use additional node features
+        self.augment_features = kwargs.get('augment_features', False)
+        self.features_dim = kwargs.get('features_dim', 31)
+
         self.g = tf.get_default_graph()
         with self.g.as_default():
             with tf.device('/cpu:0'):
@@ -49,6 +52,9 @@ class RNATracker:
                         1e-4,
                         learning_rate=self.learning_rate * self.lr_multiplier
                     )
+                    # self.optimizer = tf.train.AdagradOptimizer(
+                    #     learning_rate=self.learning_rate * self.lr_multiplier
+                    # )
 
             for i, device in enumerate(self.gpu_device_list):
                 with tf.device(device), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
@@ -71,7 +77,12 @@ class RNATracker:
         self.node_input_ph = tf.placeholder(tf.int32, shape=[None, self.max_len])
         self.node_input_splits = tf.split(self.node_input_ph, len(self.gpu_device_list))
 
+        if self.augment_features:
+            self.features = tf.placeholder(tf.float32, shape=[None, self.max_len, self.features_dim])
+            self.features_splits = tf.split(self.features, len(self.gpu_device_list))
+
         self.inference_node_ph = tf.placeholder(tf.int32, shape=[None, self.max_len])
+        self.inference_features = tf.placeholder(tf.float32, shape=[None, self.max_len, self.features_dim])
 
         if self.return_label:
             self.labels = tf.placeholder(tf.int32, shape=[None])  # binary
@@ -91,8 +102,10 @@ class RNATracker:
     def _build_rnatracker(self, split_idx, mode):
         if mode == 'training':
             node_tensor = self.node_input_splits[split_idx]
+            features = self.features_splits[split_idx]
         elif mode == 'inference':
             node_tensor = self.inference_node_ph
+            features = self.inference_features
         else:
             raise ValueError('unknown mode')
 
@@ -100,21 +113,49 @@ class RNATracker:
                                     initializer=tf.constant_initializer(self.embedding_vec), trainable=False)
         node_tensor = tf.nn.embedding_lookup(embedding, node_tensor)
 
-        with tf.variable_scope('seq_scan'):
-            output = lib.ops.Conv1D.conv1d('conv1', self.node_dim, self.units, 10, node_tensor, biases=False)
-            output = normalize('bn1', output, self.is_training_ph, self.use_bn)
-            output = tf.nn.relu(output)
-            output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
+        if self.augment_features:
+            node_tensor = tf.concat([node_tensor, features], axis=-1)
+            input_dim = self.features_dim + self.node_dim
+        else:
+            input_dim = self.node_dim
 
-            output = lib.ops.Conv1D.conv1d('conv2', self.units, self.units, 10, output, biases=False)
-            output = normalize('bn2', output, self.is_training_ph, self.use_bn)
+        with tf.variable_scope('first_concat_conv'):
+            output = []
+            for i, filter_size in enumerate([10, 15, 20, 30]):
+                conv_output = lib.ops.Conv1D.conv1d('conv_%d' % (i), input_dim, self.units, filter_size, node_tensor,
+                                                    biases=True, stride=1)
+                conv_output = tf.layers.max_pooling1d(conv_output, filter_size, 1, padding='same')
+                output.append(conv_output)
+            output = tf.concat(output, axis=-1)
             output = tf.nn.relu(output)
+            # output = tf.layers.max_pooling1d(output, 3, 1, padding='same')
+            node_tensor = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
+
+        hidden_dim = 4 * self.units
+
+        with tf.variable_scope('second_concat_conv'):
+            output = []
+            for i, filter_size in enumerate([3, 5, 7, 10]):  # larger filter length shrinks mask offset
+                conv_output = lib.ops.Conv1D.conv1d('conv_%d' % (i), hidden_dim, self.units, filter_size, node_tensor,
+                                                    biases=True, stride=1)
+                conv_output = tf.layers.max_pooling1d(conv_output, filter_size, 1, padding='same')
+                output.append(conv_output)
+            output = tf.concat(output, axis=-1)
+            output = tf.nn.relu(output)
+            # output = tf.layers.max_pooling1d(output, 3, 1, padding='same')
             output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
 
         if self.return_label:
             with tf.variable_scope('set2set_pooling'):
                 output = lib.ops.LSTM.set2set_pooling('set2set_pooling', output, self.pool_steps, self.dropout_rate,
                                                       self.is_training_ph, self.lstm_encoder)
+            # with tf.variable_scope('bilstm'):
+            #     output = lib.ops.LSTM.bilstm('bilstm', self.units, output, self.max_len, self.dropout_rate,
+            #                                  self.is_training_ph)
+            #     output = tf.concat([output[:, -1, :self.units], output[:, 0, self.units:]], axis=-1)
+        else:
+            output = lib.ops.LSTM.bilstm('bilstm', self.units, output, self.max_len, self.dropout_rate,
+                                         self.is_training_ph)
         output = lib.ops.Linear.linear('OutputMapping', output.get_shape().as_list()[-1], 2,
                                        output)  # categorical logits
 
@@ -187,7 +228,7 @@ class RNATracker:
             )
         else:
             self.inference_acc_val, self.inference_acc_update_op = tf.metrics.accuracy(
-                labels=tf.ones(tf.shape(self.prediction)[0]),
+                labels=tf.ones(tf.shape(self.inference_prediction)[0]),
                 predictions=tf.reduce_prod(
                     tf.cast(
                         tf.equal(
@@ -222,7 +263,7 @@ class RNATracker:
         checkpoints_dir = os.path.join(output_dir, 'checkpoints/')
         os.makedirs(checkpoints_dir)
 
-        node_tensor = X
+        node_tensor, features = X
         if dev_data is None or dev_targets is None:
             # split validation set
             if self.return_label:
@@ -234,22 +275,26 @@ class RNATracker:
                                list(np.random.choice(neg_idx, int(len(neg_idx) * 0.1), False)))
             train_idx = np.delete(np.arange(len(y)), dev_idx)
             dev_node_tensor = node_tensor[dev_idx]
+            dev_features = features[dev_idx]
             dev_targets = y[dev_idx]
 
             node_tensor = node_tensor[train_idx]
+            features = features[train_idx]
             y = y[train_idx]
         else:
-            dev_node_tensor = dev_data
+            dev_node_tensor, dev_features = dev_data
 
         # batch size should be a multiple of len(self.gpu_device_list)
         dev_rmd = dev_node_tensor.shape[0] % len(self.gpu_device_list)
         if dev_rmd != 0:
             dev_node_tensor = dev_node_tensor[:-dev_rmd]
+            dev_features = dev_features[:-dev_rmd]
             dev_targets = dev_targets[:-dev_rmd]
 
         train_rmd = node_tensor.shape[0] % len(self.gpu_device_list)
         if train_rmd != 0:
             node_tensor = node_tensor[:-train_rmd]
+            features = features[:-train_rmd]
             y = y[:-train_rmd]
 
         size_train = node_tensor.shape[0]
@@ -262,29 +307,35 @@ class RNATracker:
         for epoch in range(epochs):
             permute = np.random.permutation(size_train)
             node_tensor = node_tensor[permute]
+            features = features[permute]
             y = y[permute]
 
             for i in range(iters_per_epoch):
-                _node_tensor, _labels \
-                    = node_tensor[i * batch_size: (i + 1) * batch_size], \
-                      y[i * batch_size: (i + 1) * batch_size]
+                _node_tensor, _features, _labels = \
+                    node_tensor[i * batch_size: (i + 1) * batch_size], \
+                    features[i * batch_size: (i + 1) * batch_size], \
+                    y[i * batch_size: (i + 1) * batch_size]
 
-                self.sess.run(self.train_op,
-                              feed_dict={self.node_input_ph: _node_tensor,
-                                         self.labels: _labels,
-                                         self.global_step: i,
-                                         self.hf_iters_per_epoch: iters_per_epoch // 2,
-                                         self.is_training_ph: True}
-                              )
+                feed_dict = {
+                    self.node_input_ph: _node_tensor,
+                    self.labels: _labels,
+                    self.global_step: i,
+                    self.hf_iters_per_epoch: iters_per_epoch // 2,
+                    self.is_training_ph: True}
+
+                if self.augment_features:
+                    feed_dict[self.features] = _features
+
+                self.sess.run(self.train_op, feed_dict)
 
             train_cost, train_acc, train_auc = \
-                self.evaluate(node_tensor, y, batch_size)
+                self.evaluate((node_tensor, features), y, batch_size)
             lib.plot.plot('train_cost', train_cost)
             lib.plot.plot('train_acc', train_acc)
             lib.plot.plot('train_auc', train_auc)
 
             dev_cost, dev_acc, dev_auc = \
-                self.evaluate(dev_node_tensor, dev_targets, batch_size)
+                self.evaluate((dev_node_tensor, dev_features), dev_targets, batch_size)
             lib.plot.plot('dev_cost', dev_cost)
             lib.plot.plot('dev_acc', dev_acc)
             lib.plot.plot('dev_auc', dev_auc)
@@ -316,33 +367,38 @@ class RNATracker:
             logger.close()
 
     def evaluate(self, X, y, batch_size):
-        node_tensor = X
+        node_tensor, features = X
         all_cost = 0.
         iters_per_epoch = len(node_tensor) // batch_size + (0 if len(node_tensor) % batch_size == 0 else 1)
         for i in range(iters_per_epoch):
-            _node_tensor, _labels \
-                = node_tensor[i * batch_size: (i + 1) * batch_size], \
-                  y[i * batch_size: (i + 1) * batch_size]
-            cost, _, _ = self.sess.run([self.cost, self.acc_update_op, self.auc_update_op],
-                                       feed_dict={self.node_input_ph: _node_tensor,
-                                                  self.labels: _labels,
-                                                  self.is_training_ph: False}
-                                       )
+            _node_tensor, _features, _labels = \
+                node_tensor[i * batch_size: (i + 1) * batch_size], \
+                features[i * batch_size: (i + 1) * batch_size], \
+                y[i * batch_size: (i + 1) * batch_size]
+            feed_dict = {self.node_input_ph: _node_tensor,
+                         self.labels: _labels,
+                         self.is_training_ph: False}
+            if self.augment_features:
+                feed_dict[self.features] = _features
+            cost, _, _ = self.sess.run([self.cost, self.acc_update_op, self.auc_update_op], feed_dict)
             all_cost += cost * len(_node_tensor)
         acc, auc = self.sess.run([self.acc_val, self.auc_val])
         self.sess.run(self.local_init)
         return all_cost / len(node_tensor), acc, auc
 
     def predict(self, X, batch_size, y=None):
-        node_tensor = X
+        node_tensor, features = X
         all_predicton = []
         iters = len(node_tensor) // batch_size + (0 if len(node_tensor) % batch_size == 0 else 1)
         for i in range(iters):
-            _node_tensor = node_tensor[i * batch_size:(i + 1) * batch_size]
+            _node_tensor, _features = node_tensor[i * batch_size:(i + 1) * batch_size], \
+                                      features[i * batch_size:(i + 1) * batch_size]
             feed_dict = {
                 self.inference_node_ph: _node_tensor,
                 self.is_training_ph: False
             }
+            if self.augment_features:
+                feed_dict[self.inference_features] = _features
             feed_tensor = [self.inference_output]
             if y is not None:
                 _labels = y[i * batch_size:(i + 1) * batch_size]

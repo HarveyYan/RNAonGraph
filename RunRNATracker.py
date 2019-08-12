@@ -1,6 +1,5 @@
 import os
-
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import sys
 import shutil
 import inspect
 import datetime
@@ -11,22 +10,27 @@ import lib.plot, lib.dataloader, lib.logger, lib.ops.LSTM
 from lib.general_utils import Pool
 from Model.RNATracker import RNATracker
 
+tf.logging.set_verbosity(tf.logging.FATAL)
 tf.app.flags.DEFINE_string('output_dir', '', '')
 tf.app.flags.DEFINE_integer('epochs', 200, '')
 tf.app.flags.DEFINE_integer('nb_gpus', 1, '')
 tf.app.flags.DEFINE_bool('use_clr', True, '')
 tf.app.flags.DEFINE_bool('use_momentum', False, '')
 tf.app.flags.DEFINE_integer('parallel_processes', 1, '')
-tf.app.flags.DEFINE_integer('units', 128, '')
+tf.app.flags.DEFINE_integer('units', 32, '')
 tf.app.flags.DEFINE_bool('use_bn', False, '')
+tf.app.flags.DEFINE_bool('return_label', False, '')
+tf.app.flags.DEFINE_bool('use_embedding', False, '')
+tf.app.flags.DEFINE_bool('use_structure', False, '')
+tf.app.flags.DEFINE_string('merge_mode', 'concatenation', '')
+tf.app.flags.DEFINE_bool('augment_features', False, '')
 FLAGS = tf.app.flags.FLAGS
 
-BATCH_SIZE = 200 # 200 * FLAGS.nb_gpus if FLAGS.nb_gpus > 0 else 200
+BATCH_SIZE = 200  # 200 * FLAGS.nb_gpus if FLAGS.nb_gpus > 0 else 200
 EPOCHS = FLAGS.epochs  # How many iterations to train for
 DEVICES = ['/gpu:%d' % (i) for i in range(FLAGS.nb_gpus)] if FLAGS.nb_gpus > 0 else ['/cpu:0']
-RBP_LIST = lib.dataloader.all_rbps
+RBP_LIST = ['1_PARCLIP_AGO1234_hg19']  # lib.dataloader.all_rbps
 MAX_LEN = 101
-N_NODE_EMB = len(lib.dataloader.vocab)
 N_EDGE_EMB = len(lib.dataloader.BOND_TYPE)
 
 hp = {
@@ -36,6 +40,7 @@ hp = {
     'use_momentum': FLAGS.use_momentum,
     'units': FLAGS.units,
     'use_bn': FLAGS.use_bn,
+    'augment_features': FLAGS.augment_features,
 }
 
 
@@ -50,15 +55,25 @@ def Logger(q):
 
 
 def run_one_rbp(idx, q):
-    print('training', RBP_LIST[idx])
-    model = RNATracker(MAX_LEN, N_NODE_EMB, N_EDGE_EMB, DEVICES, **hp)
     rbp = RBP_LIST[idx]
     rbp_output = os.path.join(output_dir, rbp)
     os.makedirs(rbp_output)
 
-    dataset = lib.dataloader.load_clip_seq([rbp])[0]  # load one at a time
-    model.fit(dataset['train_seq'], dataset['train_label'], EPOCHS, BATCH_SIZE, rbp_output, logging=True)
-    all_prediction, acc, auc = model.predict(dataset['test_seq'], BATCH_SIZE, y=dataset['test_label'])
+    outfile = open(os.path.join(rbp_output, str(os.getpid())) + ".out", "w")
+    sys.stdout = outfile
+    sys.stderr = outfile
+    print('training', RBP_LIST[idx])
+
+    dataset = lib.dataloader.load_clip_seq([rbp], use_embedding=FLAGS.use_embedding,
+                                           merge_seq_and_struct=FLAGS.use_structure,
+                                           merge_mode=FLAGS.merge_mode)[0]  # load one at a time
+    hp['features_dim'] = dataset['train_features'].shape[-1]
+    model = RNATracker(MAX_LEN, dataset['VOCAB_VEC'].shape[1], len(lib.dataloader.BOND_TYPE),
+                       dataset['VOCAB_VEC'], DEVICES, FLAGS.return_label, **hp)
+    model.fit((dataset['train_seq'], dataset['train_features']), dataset['train_label'],
+              EPOCHS, BATCH_SIZE, rbp_output, logging=True)
+    all_prediction, acc, auc = model.predict((dataset['test_seq'], dataset['test_features']),
+                                             BATCH_SIZE, y=dataset['test_label'])
     print('Evaluation on held-out test set, acc: %.3f, auc: %.3f' % (acc, auc))
     model.delete()
     del dataset

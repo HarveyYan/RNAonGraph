@@ -54,12 +54,7 @@ def adj_mat(struct):
                          shape=(length, length))
 
 
-def fold_rna_from_file(filepath, p=None):
-    if filepath.endswith('.fa'):
-        file = open(filepath, 'r')
-    else:
-        file = gzip.open(filepath)
-
+def load_fasta_format(file):
     all_id = []
     all_seq = []
     seq = ''
@@ -75,9 +70,21 @@ def fold_rna_from_file(filepath, p=None):
         else:
             seq += row
     all_seq.append(seq)
+    return all_id, all_seq
+
+
+def fold_rna_from_file(filepath, p=None):
+    if filepath.endswith('.fa'):
+        file = open(filepath, 'r')
+    else:
+        file = gzip.open(filepath)
+
+    all_id, all_seq = load_fasta_format(file)
 
     if os.path.exists(os.path.join(os.path.dirname(filepath), 'adj_mat.obj')):
         sp_adj_matrix = pickle.load(open(os.path.join(os.path.dirname(filepath), 'adj_mat.obj'), 'rb'))
+        # load secondary structures
+        _, all_struct = load_fasta_format(open(os.path.join(os.path.dirname(filepath), 'structures.fa')))
     else:
         print('Parsing', filepath)
         if p is None:
@@ -87,10 +94,12 @@ def fold_rna_from_file(filepath, p=None):
 
         res = list(pool.imap(fold_seq, all_seq))
 
+        all_struct = []
         sp_adj_matrix = []
         with open(os.path.join(os.path.dirname(filepath), 'structures.fa'), 'w') as file:
             for id, (struct, matrix) in zip(all_id, res):
                 file.writelines('>%s\n%s\n' % (id, struct))
+                all_struct.append(struct)
                 sp_adj_matrix.append(matrix)
 
         pickle.dump(sp_adj_matrix, open(os.path.join(os.path.dirname(filepath), 'adj_mat.obj'), 'wb'))
@@ -101,7 +110,7 @@ def fold_rna_from_file(filepath, p=None):
 
     adjacency_matrix = np.stack([mat.toarray() for mat in sp_adj_matrix], axis=0)
 
-    return all_id, all_seq, adjacency_matrix
+    return all_id, all_seq, adjacency_matrix, all_struct
 
 
 def fold_and_check_hairpin(seq, return_label=True):
