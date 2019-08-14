@@ -68,7 +68,7 @@ class RNATracker:
                 self._merge()
                 self.train_op = self.optimizer.apply_gradients(self.gv)
                 _stats('RNATracker', self.gv)
-                self.saver = tf.train.Saver(max_to_keep=1000)
+                self.saver = tf.train.Saver(max_to_keep=10)
                 self.init = tf.global_variables_initializer()
                 self.local_init = tf.local_variables_initializer()
         self._init_session()
@@ -102,10 +102,12 @@ class RNATracker:
     def _build_rnatracker(self, split_idx, mode):
         if mode == 'training':
             node_tensor = self.node_input_splits[split_idx]
-            features = self.features_splits[split_idx]
+            if self.augment_features:
+                features = self.features_splits[split_idx]
         elif mode == 'inference':
             node_tensor = self.inference_node_ph
-            features = self.inference_features
+            if self.augment_features:
+                features = self.inference_features
         else:
             raise ValueError('unknown mode')
 
@@ -119,28 +121,38 @@ class RNATracker:
         else:
             input_dim = self.node_dim
 
-        with tf.variable_scope('first_concat_conv'):
-            output = []
-            for i, filter_size in enumerate([10, 15, 20, 30]):
-                conv_output = lib.ops.Conv1D.conv1d('conv_%d' % (i), input_dim, self.units, filter_size, node_tensor,
-                                                    biases=True, stride=1)
-                conv_output = tf.layers.max_pooling1d(conv_output, filter_size, 1, padding='same')
-                output.append(conv_output)
-            output = tf.concat(output, axis=-1)
+        # with tf.variable_scope('first_concat_conv'):
+        #     output = []
+        #     for i, filter_size in enumerate([7, 10, 15, 20]):
+        #         conv_output = lib.ops.Conv1D.conv1d('conv_%d' % (i), input_dim, self.units, filter_size, node_tensor,
+        #                                             biases=True, stride=1)
+        #         # conv_output = tf.layers.max_pooling1d(conv_output, filter_size, 1, padding='same')
+        #         output.append(conv_output)
+        #     output = tf.concat(output, axis=-1)
+        #     output = tf.nn.relu(output)
+        #     node_tensor = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
+        #
+        # hidden_dim = 4 * self.units
+        #
+        # with tf.variable_scope('second_concat_conv'):
+        #     output = []
+        #     for i, filter_size in enumerate([3, 5, 7, 10]):  # larger filter length shrinks mask offset
+        #         conv_output = lib.ops.Conv1D.conv1d('conv_%d' % (i), hidden_dim, self.units, filter_size, node_tensor,
+        #                                             biases=True, stride=1)
+        #         # conv_output = tf.layers.max_pooling1d(conv_output, filter_size, 1, padding='same')
+        #         output.append(conv_output)
+        #     output = tf.concat(output, axis=-1)
+        #     output = tf.nn.relu(output)
+        #     output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
+
+
+        with tf.variable_scope('seq_scan'):
+            output = lib.ops.Conv1D.conv1d('conv1', input_dim, self.units, 10, node_tensor, biases=False)
             output = tf.nn.relu(output)
             # output = tf.layers.max_pooling1d(output, 3, 1, padding='same')
-            node_tensor = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
+            output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
 
-        hidden_dim = 4 * self.units
-
-        with tf.variable_scope('second_concat_conv'):
-            output = []
-            for i, filter_size in enumerate([3, 5, 7, 10]):  # larger filter length shrinks mask offset
-                conv_output = lib.ops.Conv1D.conv1d('conv_%d' % (i), hidden_dim, self.units, filter_size, node_tensor,
-                                                    biases=True, stride=1)
-                conv_output = tf.layers.max_pooling1d(conv_output, filter_size, 1, padding='same')
-                output.append(conv_output)
-            output = tf.concat(output, axis=-1)
+            output = lib.ops.Conv1D.conv1d('conv2', self.units, self.units, 10, output, biases=False)
             output = tf.nn.relu(output)
             # output = tf.layers.max_pooling1d(output, 3, 1, padding='same')
             output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
@@ -253,7 +265,7 @@ class RNATracker:
     def reset_session(self):
         del self.saver
         with self.g.as_default():
-            self.saver = tf.train.Saver(max_to_keep=100)
+            self.saver = tf.train.Saver(max_to_keep=10)
         self.sess.run(self.init)
         self.sess.run(self.local_init)
         lib.plot.reset()

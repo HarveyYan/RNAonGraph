@@ -38,7 +38,7 @@ def compare_two_csvs(path_to_csv_1, path_to_csv_2, experiment, axis_name_1, axis
     )
     file2 = file2.sort_values('RBP')
     import numpy as np
-    print(np.where(np.array(file1['auc']) > np.array(file2['auc']))[0].__len__())
+    print(np.where(np.array(file1['auc'][:len(file2['auc'])]) > np.array(file2['auc']))[0].__len__())
     fig = plt.figure(figsize=(12, 12))
     fig.add_subplot(111)
     plt.title(experiment)
@@ -47,13 +47,18 @@ def compare_two_csvs(path_to_csv_1, path_to_csv_2, experiment, axis_name_1, axis
     plt.ylim([0.0, 1.05])
     plt.xlabel(axis_name_1)
     plt.ylabel(axis_name_2)
-    plt.scatter(file1['auc'], file2['auc'])
+    plt.scatter(file1['auc'][:len(file2['auc'])], file2['auc'])
     if not os.path.exists('../Graph'):
         os.mkdir('../Graph')
     plt.savefig('../Graph/%s.png'%(experiment))
 
 
 if __name__ == "__main__":
-    compare_two_csvs('../output/RGCN/20190807-195408-ggnn-attention-32-20-vanilla-attention/rbp-results.csv',
-                     '../output/RGCN/20190807-195921-ggnn-attention-32-20-simplified-embedding/rbp-results.csv',
-                     'attention-vs-simplified-embedding', 'GGNN-attention', 'GGNN-simplified-embedding')
+
+    compare_two_csvs('../output/RNATracker/20190705-141134-set2set-t10-128/rbp-results.csv',
+                     '../output/RNATracker/20190813-010754-smaller-arch/rbp-results.csv',
+                     'smaller-vs-ordinary-rnatracker', 'ordinary-model', 'smaller-model')
+
+    # compare_two_csvs('../output/RGCN/20190807-195408-ggnn-attention-32-20-vanilla-attention/rbp-results.csv',
+    #                  '../output/RGCN/20190807-195921-ggnn-attention-32-20-simplified-embedding/rbp-results.csv',
+    #                  'attention-vs-simplified-embedding', 'GGNN-attention', 'GGNN-simplified-embedding')

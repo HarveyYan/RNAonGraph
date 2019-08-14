@@ -18,17 +18,26 @@ tf.app.flags.DEFINE_integer('nb_gpus', 1, '')
 tf.app.flags.DEFINE_bool('use_clr', True, '')
 tf.app.flags.DEFINE_bool('use_momentum', False, '')
 tf.app.flags.DEFINE_integer('parallel_processes', 1, '')
+
 tf.app.flags.DEFINE_bool('use_attention', False, '')
 tf.app.flags.DEFINE_bool('expr_simplified_attention', False, '')
-tf.app.flags.DEFINE_bool('lstm_ggnn', False, '')
+tf.app.flags.DEFINE_bool('lstm_ggnn', True, '')
 tf.app.flags.DEFINE_bool('use_embedding', False, '')
 tf.app.flags.DEFINE_bool('augment_features', False, '')
+tf.app.flags.DEFINE_bool('use_conv', True, '')
+
+tf.app.flags.DEFINE_integer('nb_layers', 40, '')
+# switch dataset
+tf.app.flags.DEFINE_bool('use_smaller_clip_seq', False, '')
 FLAGS = tf.app.flags.FLAGS
 
-BATCH_SIZE = 200  # * FLAGS.nb_gpus if FLAGS.nb_gpus > 0 else 200
+if FLAGS.use_smaller_clip_seq:
+    lib.dataloader.path_template = lib.dataloader.path_template.replace('30000', '5000')
+
+BATCH_SIZE = 100  # * FLAGS.nb_gpus if FLAGS.nb_gpus > 0 else 200
 EPOCHS = FLAGS.epochs  # How many iterations to train for
 DEVICES = ['/gpu:%d' % (i) for i in range(FLAGS.nb_gpus)] if FLAGS.nb_gpus > 0 else ['/cpu:0']
-RBP_LIST = ['1_PARCLIP_AGO1234_hg19'] # lib.dataloader.all_rbps
+RBP_LIST = lib.dataloader.all_rbps
 MAX_LEN = 101
 
 hp = {
@@ -40,11 +49,12 @@ hp = {
     'use_bn': False,
     'units': 32,
     'reuse_weights': True,
-    'layers': 20,
-    'test_gated_nn': True,
+    'layers': FLAGS.nb_layers,
+    'test_gated_nn': True, # must be set to True
     'expr_simplified_attention': FLAGS.expr_simplified_attention,
     'lstm_ggnn': FLAGS.lstm_ggnn,
     'augment_features': FLAGS.augment_features,
+    'use_conv': FLAGS.use_conv,
 }
 
 
@@ -69,9 +79,8 @@ def run_one_rbp(idx, q):
 
     print('training', RBP_LIST[idx])
     dataset = lib.dataloader.load_clip_seq([rbp], use_embedding=FLAGS.use_embedding)[0]  # load one at a time
-    hp['features_dim'] = dataset['train_features'].shape[-1]
     model = RGCN(MAX_LEN, dataset['VOCAB_VEC'].shape[1], len(lib.dataloader.BOND_TYPE),
-                 dataset['VOCAB_VEC'], DEVICES, **hp)
+                 dataset['VOCAB_VEC'], DEVICES, **hp, features_dim=dataset['train_features'].shape[-1])
     model.fit((dataset['train_seq'], dataset['train_adj_mat'], dataset['train_features']), dataset['train_label'],
               EPOCHS, BATCH_SIZE, rbp_output, logging=True)
     all_prediction, acc, auc = model.predict((dataset['test_seq'], dataset['test_adj_mat'], dataset['test_features']),

@@ -41,6 +41,7 @@ class RGCN:
         self.test_gated_nn = kwargs.get('test_gated_nn', False)
         self.expr_simplified_attention = kwargs.get('expr_simplified_attention', False)
         self.lstm_ggnn = kwargs.get('lstm_ggnn', False)
+        self.use_conv = kwargs.get('use_conv', True)
 
         # use additional node features
         self.augment_features = kwargs.get('augment_features', False)
@@ -66,7 +67,8 @@ class RGCN:
                     if self.test_gated_nn:
                         self._build_ggnn(i, mode='training')
                     else:
-                        self._build_rgcn(i, mode='training')
+                        raise ValueError('rgcn model has been excluded')
+                        # self._build_rgcn(i, mode='training')
                     self._loss(i)
                     self._train(i)
 
@@ -74,12 +76,13 @@ class RGCN:
                 if self.test_gated_nn:
                     self._build_ggnn(None, mode='inference')
                 else:
-                    self._build_rgcn(None, mode='inference')
+                    raise ValueError('rgcn model has been excluded')
+                    # self._build_rgcn(None, mode='inference')
 
                 self._merge()
                 self.train_op = self.optimizer.apply_gradients(self.gv)
                 _stats('RGCN', self.gv)
-                self.saver = tf.train.Saver(max_to_keep=1000)
+                self.saver = tf.train.Saver(max_to_keep=10)
                 self.init = tf.global_variables_initializer()
                 self.local_init = tf.local_variables_initializer()
         self._init_session()
@@ -115,74 +118,6 @@ class RGCN:
         else:
             self.lr_multiplier = 1.
 
-    def _build_rgcn(self, split_idx, mode):
-        '''
-        fixing hidden dimension to 32, which presumably gives the best performance
-        '''
-        if mode == 'training':
-            node_tensor = self.node_input_splits[split_idx]
-            adj_tensor = self.adj_mat_splits[split_idx]
-        elif mode == 'inference':
-            node_tensor = self.inference_node_ph
-            adj_tensor = self.inference_adj_mat
-        else:
-            raise ValueError('unknown mode')
-
-        embedding = tf.get_variable('embedding_layer', shape=(self.vocab_size, self.node_dim),
-                                    initializer=tf.constant_initializer(self.embedding_vec), trainable=False)
-        node_tensor = tf.nn.embedding_lookup(embedding, node_tensor)
-        if self.reuse_weights:
-            if self.node_dim < self.units:
-                node_tensor = tf.pad(node_tensor,
-                                     [[0, 0], [0, 0], [0, self.units - self.node_dim]])
-            elif self.node_dim > self.units:
-                print('Changing \'self.units\' to %d!' % (self.node_dim))
-                self.units = self.node_dim
-
-        hidden_tensor = None
-
-        for i, u in enumerate([self.units] * self.layers):
-            name = 'graph_convolution' if self.reuse_weights else 'graph_convolution_%d' % (i + 1)
-            if self.use_attention:
-                hidden_tensor = att_gcl(name, (adj_tensor, hidden_tensor, node_tensor), u,
-                                        reuse=self.reuse_weights, expr_simplified_att=self.expr_simplified_attention)
-            else:
-                hidden_tensor = graph_convolution_layers(name, (adj_tensor, hidden_tensor, node_tensor), u,
-                                                         reuse=self.reuse_weights)
-            hidden_tensor = normalize('Norm_%d' % (i + 1), hidden_tensor, self.use_bn, self.is_training_ph)
-            hidden_tensor = tf.nn.relu(hidden_tensor)
-            hidden_tensor = tf.layers.dropout(hidden_tensor, self.dropout_rate, training=self.is_training_ph)
-            # [batch_size, length, u]
-
-        output = tf.concat([hidden_tensor, node_tensor], axis=-1)
-
-        if self.return_label:
-            with tf.variable_scope('seq_scan'):
-                output = lib.ops.Conv1D.conv1d('conv1', self.units * 2, self.units, 10, output, biases=False)
-                output = normalize('bn1', output, self.use_bn, self.is_training_ph)
-                output = tf.nn.relu(output)
-                output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
-
-                output = lib.ops.Conv1D.conv1d('conv2', self.units, self.units, 10, output, biases=False)
-                output = normalize('bn2', output, self.use_bn, self.is_training_ph)
-                output = tf.nn.relu(output)
-                output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
-
-            with tf.variable_scope('set2set_pooling'):
-                output = lib.ops.LSTM.set2set_pooling('set2set_pooling', output, self.pool_steps, self.dropout_rate,
-                                                      self.is_training_ph, self.lstm_encoder)
-
-        output = lib.ops.Linear.linear('OutputMapping', output.get_shape().as_list()[-1], 2,
-                                       output)  # categorical logits
-
-        if mode == 'training':
-            if not hasattr(self, 'output'):
-                self.output = [output]
-            else:
-                self.output += [output]
-        else:
-            self.inference_output = output
-
     def _build_ggnn(self, split_idx, mode):
         if mode == 'training':
             node_tensor = self.node_input_splits[split_idx]
@@ -200,7 +135,6 @@ class RGCN:
         with tf.device('/cpu:0'):
             embedding = tf.get_variable('embedding_layer', shape=(self.vocab_size, self.node_dim),
                                         initializer=tf.constant_initializer(self.embedding_vec), trainable=False)
-
         node_tensor = tf.nn.embedding_lookup(embedding, node_tensor)
 
         if self.augment_features:
@@ -214,8 +148,8 @@ class RGCN:
                 node_tensor = tf.pad(node_tensor,
                                      [[0, 0], [0, 0], [0, self.units - self.node_dim]])
             elif input_dim > self.units:
-                print('Changing \'self.units\' to %d!' % (self.node_dim))
-                self.units = self.node_dim
+                print('Changing \'self.units\' to %d!' % (input_dim))
+                self.units = input_dim
 
         hidden_tensor = None
         with tf.variable_scope('gated-rgcn', reuse=tf.AUTO_REUSE):
@@ -235,8 +169,12 @@ class RGCN:
             for i in range(self.layers):
                 name = 'graph_convolution' if self.reuse_weights else 'graph_convolution_%d' % (i + 1)
                 if self.use_attention:
-                    msg_tensor = att_gcl(name, (adj_tensor, hidden_tensor, node_tensor), self.units,
-                                         reuse=self.reuse_weights)
+                    all_msg_tensor = []
+                    for head in range(1):
+                        msg_tensor = att_gcl(name+'_head_%d'%(head), (adj_tensor, hidden_tensor, node_tensor), self.units,
+                                             reuse=self.reuse_weights)
+                        all_msg_tensor.append(msg_tensor)
+                    msg_tensor = tf.add_n(all_msg_tensor) / len(all_msg_tensor)
                 else:
                     msg_tensor = graph_convolution_layers(name, (adj_tensor, hidden_tensor, node_tensor), self.units,
                                                           reuse=self.reuse_weights)
@@ -266,16 +204,17 @@ class RGCN:
         if self.return_label:
             # globally pooling along the spatial axis of data,
             # arriving at a single feature vector for the whole graph
-            with tf.variable_scope('seq_scan'):
-                output = lib.ops.Conv1D.conv1d('conv1', self.units * 2, self.units, 10, output, biases=False)
-                output = normalize('bn1', output, self.use_bn, self.is_training_ph)
-                output = tf.nn.relu(output)
-                output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
+            if self.use_conv:
+                with tf.variable_scope('seq_scan'):
+                    output = lib.ops.Conv1D.conv1d('conv1', self.units * 2, self.units, 10, output, biases=False)
+                    output = normalize('bn1', output, self.use_bn, self.is_training_ph)
+                    output = tf.nn.relu(output)
+                    output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
 
-                output = lib.ops.Conv1D.conv1d('conv2', self.units, self.units, 10, output, biases=False)
-                output = normalize('bn2', output, self.use_bn, self.is_training_ph)
-                output = tf.nn.relu(output)
-                output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
+                    output = lib.ops.Conv1D.conv1d('conv2', self.units, self.units, 10, output, biases=False)
+                    output = normalize('bn2', output, self.use_bn, self.is_training_ph)
+                    output = tf.nn.relu(output)
+                    output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
 
             with tf.variable_scope('set2set_pooling'):
                 output = lib.ops.LSTM.set2set_pooling('set2set_pooling', output, self.pool_steps, self.dropout_rate,
@@ -414,7 +353,7 @@ class RGCN:
     def reset_session(self):
         del self.saver
         with self.g.as_default():
-            self.saver = tf.train.Saver(max_to_keep=100)
+            self.saver = tf.train.Saver(max_to_keep=10)
         self.sess.run(self.init)
         self.sess.run(self.local_init)
         lib.plot.reset()
