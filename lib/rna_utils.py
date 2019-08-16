@@ -1,10 +1,10 @@
 import re
 import os
 import sys
+import RNA
 import gzip
 import pickle
 import numpy as np
-from RNA import fold
 import scipy.sparse as sp
 from functools import partial
 import forgi.graph.bulge_graph as fgb
@@ -25,8 +25,117 @@ def adj_to_bias(adj, nhood=1):
     return -1e9 * (1.0 - mt)
 
 
-def fold_seq(seq):
-    struct = fold(seq)[0]
+def fold_seq_subopt(seq, fold_algo, sampling=False, sampling_amount=1000):
+    if fold_algo == 'rnafold':
+        if sampling:
+            # sampling from a boltzmann ensemble
+            # create model details
+            md = RNA.md()
+            # activate unique multibranch loop decomposition
+            md.uniq_ML = 1
+            # create fold compound object
+            fc = RNA.fold_compound(seq, md)
+            # compute MFE
+            (ss, mfe) = fc.mfe()
+            # rescale Boltzmann factors according to MFE
+            fc.exp_params_rescale(mfe)
+            # compute partition function to fill DP matrices
+            fc.pf()
+
+            struct_list = fc.pbacktrack_nr(sampling_amount)
+        else:
+            struct_list, energy_list = [], []
+
+            def collect_subopt_result(structure, energy, *args):
+                if not structure == None:
+                    struct_list.append(structure)
+                    energy_list.append(energy)
+
+            # Enumerate all structures 100 dacal/mol = 1 kcal/mol arround
+            # default deltaEnergy is the MFE
+            RNA.fold_compound(seq).subopt_cb(100, collect_subopt_result, None)
+
+            # sort
+            struct_list = list(np.array(struct_list)[np.argsort(energy_list)])
+    else:
+        raise ValueError('Not supporting other folding algorithms yet')
+    # merging all structures into a single adjacency matrix
+    # probability returning two matrices
+    matrix = adj_mat_subopt(struct_list, sampling)
+    return struct_list, matrix
+
+
+def adj_mat_subopt(struct_list, sampling):
+    # create sparse matrix
+    row_col, data = [], []
+    length = len(struct_list[0])
+    counts = []
+    for i in range(length):
+        if i != length - 1:
+            row_col.append((i, i + 1))
+            data.append(1)
+            counts.append(0)
+        if i != 0:
+            row_col.append((i, i - 1))
+            data.append(2)
+            counts.append(0)
+    if sampling:
+        for struct in struct_list:
+            bg = fgb.BulgeGraph.from_dotbracket(struct)
+            for i, ele in enumerate(struct):
+                if ele == '(':
+                    if not (i, bg.pairing_partner(i + 1) - 1) in row_col:
+                        row_col.append((i, bg.pairing_partner(i + 1) - 1))
+                        data.append(3)
+                        counts.append(1)
+                    else:
+                        idx = row_col.index((i, bg.pairing_partner(i + 1) - 1))
+                        counts[idx] += 1
+                elif ele == ')':
+                    if not (i, bg.pairing_partner(i + 1) - 1) in row_col:
+                        row_col.append((i, bg.pairing_partner(i + 1) - 1))
+                        data.append(4)
+                        counts.append(1)
+                    else:
+                        idx = row_col.index((i, bg.pairing_partner(i + 1) - 1))
+                        counts[idx] += 1
+        # normalize each row into probabilities
+        for i in range(len(row_col)):
+            if counts[i] > 0:
+                # have to be a hydrogen bond
+                counts[i] /= len(struct_list)
+            else:
+                # covalent bond that forms the stem
+                counts[i] = 1.
+        return (sp.csr_matrix((data, (np.array(row_col)[:, 0], np.array(row_col)[:, 1])), shape=(length, length)), \
+                sp.csr_matrix((counts, (np.array(row_col)[:, 0], np.array(row_col)[:, 1])), shape=(length, length)),)
+    else:
+        for struct in struct_list:
+            bg = fgb.BulgeGraph.from_dotbracket(struct)
+            for i, ele in enumerate(struct):
+                if ele == '(':
+                    if not (i, bg.pairing_partner(i + 1) - 1) in row_col:
+                        row_col.append((i, bg.pairing_partner(i + 1) - 1))
+                        data.append(3)
+                elif ele == ')':
+                    if not (i, bg.pairing_partner(i + 1) - 1) in row_col:
+                        row_col.append((i, bg.pairing_partner(i + 1) - 1))
+                        data.append(4)
+        return sp.csr_matrix((data, (np.array(row_col)[:, 0], np.array(row_col)[:, 1])),
+                             shape=(length, length))
+
+
+'''
+special case where only the MFE structure is picked
+'''
+
+
+def fold_seq(seq, fold_algo):
+    '''fold sequence using RNAfold'''
+    if fold_algo == 'rnafold':
+        struct = RNA.fold(seq)[0]
+    else:
+        raise ValueError('Not supporting other folding algorithms yet')
     matrix = adj_mat(struct)
     return struct, matrix
 
@@ -73,7 +182,7 @@ def load_fasta_format(file):
     return all_id, all_seq
 
 
-def fold_rna_from_file(filepath, p=None):
+def fold_rna_from_file(filepath, p=None, fold_algo='rnafold', sampling=False, force_recompute=False):
     if filepath.endswith('.fa'):
         file = open(filepath, 'r')
     else:
@@ -81,43 +190,73 @@ def fold_rna_from_file(filepath, p=None):
 
     all_id, all_seq = load_fasta_format(file)
 
-    if os.path.exists(os.path.join(os.path.dirname(filepath), 'adj_mat.obj')):
-        sp_adj_matrix = pickle.load(open(os.path.join(os.path.dirname(filepath), 'adj_mat.obj'), 'rb'))
+    # compatible with already computed structures with RNAfold
+    prefix = '%s_%s_' % (fold_algo, sampling)
+
+    if os.path.exists(os.path.join(os.path.dirname(filepath), '{}rel_mat.obj'.format(prefix))) and not force_recompute:
+        sp_rel_matrix = pickle.load(open(os.path.join(os.path.dirname(filepath), '{}rel_mat.obj'.format(prefix)), 'rb'))
+        if sampling:
+            sp_prob_matrix = pickle.load(
+                open(os.path.join(os.path.dirname(filepath), '{}prob_mat.obj'.format(prefix)), 'rb'))
         # load secondary structures
-        _, all_struct = load_fasta_format(open(os.path.join(os.path.dirname(filepath), 'structures.fa')))
+        _, all_struct = load_fasta_format(
+            open(os.path.join(os.path.dirname(filepath), '{}structures.fa'.format(prefix))))
     else:
         print('Parsing', filepath)
         if p is None:
-            pool = Pool(8)
+            pool = Pool(int(os.cpu_count()*2/3))
         else:
             pool = p
 
-        res = list(pool.imap(fold_seq, all_seq))
+        fold_func = partial(fold_seq_subopt, fold_algo=fold_algo, sampling=sampling)
+        res = list(pool.imap(fold_func, all_seq))
 
         all_struct = []
-        sp_adj_matrix = []
-        with open(os.path.join(os.path.dirname(filepath), 'structures.fa'), 'w') as file:
-            for id, (struct, matrix) in zip(all_id, res):
-                file.writelines('>%s\n%s\n' % (id, struct))
-                all_struct.append(struct)
-                sp_adj_matrix.append(matrix)
+        if sampling:
+            sp_rel_matrix = []
+            sp_prob_matrix = []
+        else:
+            sp_rel_matrix = []
+        with open(os.path.join(os.path.dirname(filepath), '{}structures.fa'.format(prefix)), 'w') as file:
+            for id, (struct_list, matrix) in zip(all_id, res):
+                # for now let's assume so
+                # it could be:
+                #   struct_list, probs = fold_res
+                # in the future when we have implemented sampling
+                file.writelines('>%s\n%s\n' % (id, '\n'.join(struct_list)))
+                all_struct.append(
+                    ''.join(struct_list))  # or instead simply return list and let the dataloader encode them?
+                if sampling:
+                    rel_mat, prob_mat = matrix
+                    sp_prob_matrix.append(prob_mat)
+                else:
+                    rel_mat = matrix
+                sp_rel_matrix.append(rel_mat)
 
-        pickle.dump(sp_adj_matrix, open(os.path.join(os.path.dirname(filepath), 'adj_mat.obj'), 'wb'))
+        pickle.dump(sp_rel_matrix,
+                    open(os.path.join(os.path.dirname(filepath), '{}rel_mat.obj'.format(prefix)), 'wb'))
+        if sampling:
+            pickle.dump(sp_prob_matrix,
+                        open(os.path.join(os.path.dirname(filepath), '{}prob_mat.obj'.format(prefix)), 'wb'))
 
         if p is None:
             pool.close()
             pool.join()
 
-    adjacency_matrix = np.stack([mat.toarray() for mat in sp_adj_matrix], axis=0)
-
-    return all_id, all_seq, adjacency_matrix, all_struct
+    adjacency_matrix = np.stack([mat.toarray() for mat in sp_rel_matrix], axis=0)
+    if sampling:
+        probility_matrix = np.stack([mat.toarray() for mat in sp_prob_matrix], axis=0)
+        matrix = (adjacency_matrix, probility_matrix)
+    else:
+        matrix = adjacency_matrix
+    return all_id, all_seq, matrix, all_struct
 
 
 def fold_and_check_hairpin(seq, return_label=True):
     regex = r'^\(\(\(\.\.\.\)\)\)[\.\(]|[\.\)]\(\(\(\.\.\.\)\)\)$|[\.\)]\(\(\(\.\.\.\)\)\)|\(\(\(\.\.\.\)\)\)[\.\(]'
     '''return label, or an annotation over the entire seq'''
     '''fold rna and check if the structure contains a hairpin of 3 loose nucleotide connected by a stem of 3 basepairs'''
-    struct = fold(seq)[0]
+    struct = RNA.fold(seq)[0]
     mat = adj_mat(struct)
     if return_label:
         match = re.search(regex, struct)
@@ -134,7 +273,7 @@ def fold_and_check_element(seq, element_symbol, return_label=True):
     '''simply use forgi to annotate the whole string and check if it contains the element'''
     '''return label, or an annotation over the entire seq'''
     '''fold rna and check if the structure contains a hairpin of 3 loose nucleotide connected by a stem of 3 basepairs'''
-    struct = fold(seq)[0]
+    struct = RNA.fold(seq)[0]
     mat = adj_mat(struct)
     bg = fgb.BulgeGraph.from_dotbracket(struct)
     annotation = bg.to_element_string(())
@@ -283,10 +422,30 @@ def generate_element_dataset(n, length, element_symbol, p=None, return_label=Tru
 
 
 if __name__ == "__main__":
+    np.set_printoptions(threshold=np.inf, edgeitems=30, linewidth=100000, )
+
+    # sanity check
+    # _, res = fold_seq_subopt(
+    #     'TGTGAAGCGCGGCTAGCTGCCGGGGTTCGAGGTGGGTCCCAGGGTTAAAATCCCTTGTTGTCTTACTGGTGGCAGCAAGCTAGGACTATACTCCTCGGTCG',
+    #     'rnafold', True, 1)
+    # print(res[0].todense())
+    # print(res[1].todense())
+    # exit()
+
+    _, res = fold_seq_subopt(
+        'TGTGAAGCGCGGCTAGCTGCCGGGGTTCGAGGTGGGTCCCAGGGTTAAAATCCCTTGTTGTCTTACTGGTGGCAGCAAGCTAGGACTATACTCCTCGGTCG',
+        'rnafold', True, 5000)
+    _, new_res = fold_seq_subopt(
+        'TGTGAAGCGCGGCTAGCTGCCGGGGTTCGAGGTGGGTCCCAGGGTTAAAATCCCTTGTTGTCTTACTGGTGGCAGCAAGCTAGGACTATACTCCTCGGTCG',
+        'rnafold', True, 5000)
+    diff = np.abs(res[1].todense() - new_res[1].todense())
+    print(np.mean(np.max(diff, axis=-1)))
+    print(diff)
+
     # annotation for the multiloop elements
-    all_seqs, adjacency_matrix, all_labels, _ = generate_element_dataset(80000, 101, 'i', return_label=False)
-    print(all_labels.shape)
-    print(np.where(np.count_nonzero(all_labels, axis=-1) > 0)[0].__len__())
+    # all_seqs, adjacency_matrix, all_labels, _ = generate_element_dataset(80000, 101, 'i', return_label=False)
+    # print(all_labels.shape)
+    # print(np.where(np.count_nonzero(all_labels, axis=-1) > 0)[0].__len__())
 
     # all_seqs, adjacency_matrix, all_labels, _ = generate_hairpin_dataset(80000, 101, 'm', return_label=False)
     # print(all_labels.shape)

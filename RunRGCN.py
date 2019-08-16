@@ -18,15 +18,15 @@ tf.app.flags.DEFINE_integer('nb_gpus', 1, '')
 tf.app.flags.DEFINE_bool('use_clr', True, '')
 tf.app.flags.DEFINE_bool('use_momentum', False, '')
 tf.app.flags.DEFINE_integer('parallel_processes', 1, '')
-
+# some experiment settings
 tf.app.flags.DEFINE_bool('use_attention', False, '')
 tf.app.flags.DEFINE_bool('expr_simplified_attention', False, '')
 tf.app.flags.DEFINE_bool('lstm_ggnn', True, '')
 tf.app.flags.DEFINE_bool('use_embedding', False, '')
 tf.app.flags.DEFINE_bool('augment_features', False, '')
 tf.app.flags.DEFINE_bool('use_conv', True, '')
-
 tf.app.flags.DEFINE_integer('nb_layers', 40, '')
+tf.app.flags.DEFINE_bool('sampling', True, '')
 # switch dataset
 tf.app.flags.DEFINE_bool('use_smaller_clip_seq', False, '')
 FLAGS = tf.app.flags.FLAGS
@@ -48,13 +48,14 @@ hp = {
     'use_attention': FLAGS.use_attention,
     'use_bn': False,
     'units': 32,
-    'reuse_weights': True,
+    'reuse_weights': True, # highly suggested
     'layers': FLAGS.nb_layers,
-    'test_gated_nn': True, # must be set to True
+    'test_gated_nn': True,  # must be set to True
     'expr_simplified_attention': FLAGS.expr_simplified_attention,
     'lstm_ggnn': FLAGS.lstm_ggnn,
     'augment_features': FLAGS.augment_features,
     'use_conv': FLAGS.use_conv,
+    'sampling': FLAGS.sampling
 }
 
 
@@ -78,13 +79,28 @@ def run_one_rbp(idx, q):
     sys.stderr = outfile
 
     print('training', RBP_LIST[idx])
-    dataset = lib.dataloader.load_clip_seq([rbp], use_embedding=FLAGS.use_embedding)[0]  # load one at a time
+    dataset = lib.dataloader.load_clip_seq([rbp], use_embedding=FLAGS.use_embedding,
+                                           augment_features=FLAGS.augment_features, sampling=FLAGS.sampling)[0]  # load one at a time
+    if FLAGS.augment_features:
+        hp['features_dim'] = dataset['train_features'].shape[-1]
     model = RGCN(MAX_LEN, dataset['VOCAB_VEC'].shape[1], len(lib.dataloader.BOND_TYPE),
-                 dataset['VOCAB_VEC'], DEVICES, **hp, features_dim=dataset['train_features'].shape[-1])
-    model.fit((dataset['train_seq'], dataset['train_adj_mat'], dataset['train_features']), dataset['train_label'],
-              EPOCHS, BATCH_SIZE, rbp_output, logging=True)
-    all_prediction, acc, auc = model.predict((dataset['test_seq'], dataset['test_adj_mat'], dataset['test_features']),
-                                             BATCH_SIZE, y=dataset['test_label'])
+                 dataset['VOCAB_VEC'], DEVICES, **hp)
+
+    if FLAGS.sampling:
+        train_data = [dataset['train_seq'], (dataset['train_adj_mat'], dataset['train_prob_mat'])]
+    else:
+        train_data = [dataset['train_seq'], dataset['train_adj_mat']]
+    if FLAGS.augment_features:
+        train_data.append(dataset['train_features'])
+    model.fit(train_data, dataset['train_label'], EPOCHS, BATCH_SIZE, rbp_output, logging=True)
+
+    if FLAGS.sampling:
+        test_data = [dataset['test_seq'], (dataset['test_adj_mat'], dataset['test_prob_mat'])]
+    else:
+        test_data = [dataset['test_seq'], dataset['test_adj_mat']]
+    if FLAGS.augment_features:
+        test_data.append(dataset['test_features'])
+    all_prediction, acc, auc = model.predict(test_data, BATCH_SIZE, y=dataset['test_label'])
     print('Evaluation on held-out test set, acc: %.3f, auc: %.3f' % (acc, auc))
     model.delete()
     del dataset

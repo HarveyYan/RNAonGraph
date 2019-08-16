@@ -26,17 +26,21 @@ BOND_TYPE = {
 
 
 def augment_features(path):
+    '''
+    try to avoid this as much as possible.
+    we are mostly interested in an end-to-end learning scenario
+    '''
     # region type: 101 x 5
     region_types = np.loadtxt(gzip.open(os.path.join(path, "matrix_RegionType.tab.gz")), skiprows=1)
-    assert(region_types.shape[1] == 505) # 4 region types
+    assert (region_types.shape[1] == 505)  # 4 region types
     region_types = np.transpose(region_types.reshape((region_types.shape[0], 5, 101)), [0, 2, 1])
 
     coclip = np.loadtxt(gzip.open(os.path.join(path, "matrix_Cobinding.tab.gz")), skiprows=1)
-    assert(coclip.shape[1] % 101 == 0)
+    assert (coclip.shape[1] % 101 == 0)
     nb_exprs = coclip.shape[1] // 101
     coclip = np.transpose(coclip.reshape((coclip.shape[0], nb_exprs, 101)), [0, 2, 1])
 
-    return np.concatenate([region_types, coclip], axis=-1) # [dataset_size, length, hidden_size]
+    return np.concatenate([region_types, coclip], axis=-1)
 
 
 def load_clip_seq(rbp_list=None, p=None, **kwargs):
@@ -45,38 +49,51 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
     needs to be computed at the data loading stage
     '''
     if p is None:
-        pool = Pool(8)
+        pool = Pool(int(os.cpu_count()*2/3))
     else:
         pool = p
 
     clip_data = []
 
+    fold_algo = kwargs.get('fold_algo', 'rnafold')
+    sampling = kwargs.get('sampling', False)
+
     rbp_list = all_rbps if rbp_list is None else rbp_list
     for rbp in rbp_list:
         dataset = {}
 
-        all_id, all_seq, adjacency_matrix, all_struct = lib.rna_utils. \
-            fold_rna_from_file(path_template.format(rbp, 'training_sample_0', 'sequences.fa.gz'), pool)
+        all_id, all_seq, matrix, all_struct = lib.rna_utils. \
+            fold_rna_from_file(path_template.format(rbp, 'training_sample_0', 'sequences.fa.gz'), pool,
+                               fold_algo, sampling)
+
+        if sampling:
+            adjacency_matrix, probability_matrix = matrix
+        else:
+            adjacency_matrix = matrix
 
         permute = np.random.permutation(len(all_id))
         dataset['train_label'] = np.array([int(id.split(' ')[-1].split(':')[-1]) for id in all_id])[permute]
         dataset['train_adj_mat'] = adjacency_matrix[permute]
+        if sampling:
+            dataset['train_prob_mat'] = probability_matrix[permute]
 
-        # additional features: [size, length, features_dim]
-        additional_features = augment_features(path_template.format(rbp, 'training_sample_0', ''))[permute]
-        dataset['train_features'] = additional_features
+        if kwargs.get('augment_features', False):
+            # additional features: [size, length, features_dim]
+            dataset['train_features'] = augment_features(path_template.format(rbp, 'training_sample_0', ''))[permute]
 
         # dot bracket structure features
         VOCAB_STRUCT = ['.', '(', ')']
         VOCAB_STRUCT_VEC = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]]).astype(np.float32)
-        dataset['train_struct'] = np.array([[VOCAB_STRUCT.index(c) for c in struct] for struct in all_struct])[permute]
+        '''todo: won't be this simple anymore! we will have a list of all sampled/selected structures'''
+        # dataset['train_struct'] = np.array([[VOCAB_STRUCT.index(c) for c in struct] for struct in all_struct])[permute]
 
         use_embedding = kwargs.get('use_embedding', False)
         kmer_len = kwargs.get('kmer_len', 3)
         window = kwargs.get('window', 12)
         emb_size = kwargs.get('emb_size', 50)
         if use_embedding:
-            path = os.path.join(basedir, path_template.format(rbp, 'training_sample_0', 'word2vec_%d_%d_%d.obj' % (kmer_len, window, emb_size)))
+            path = os.path.join(basedir, path_template.format(rbp, 'training_sample_0',
+                                                              'word2vec_%d_%d_%d.obj' % (kmer_len, window, emb_size)))
             if not os.path.exists(path):
                 pretrain_word2vec(all_seq, kmer_len, window, emb_size, path)
             word2vec_model = Word2Vec.load(path)
@@ -86,20 +103,29 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
             dataset['train_seq'] = np.array([[VOCAB.index(c) for c in seq] for seq in kmers])[permute]
         else:
             VOCAB = ['NOT_FOUND', 'A', 'C', 'G', 'T', 'N']
-            VOCAB_VEC = np.array([[0, 0, 0, 0, 0], [1, 0, 0, 0, 0], [0, 1, 0, 0, 0], [0, 0, 1, 0, 0], [0, 0, 0, 1, 0], [0, 0, 0, 0, 1]]).astype(
+            VOCAB_VEC = np.array([[0, 0, 0, 0, 0], [1, 0, 0, 0, 0], [0, 1, 0, 0, 0], [0, 0, 1, 0, 0], [0, 0, 0, 1, 0],
+                                  [0, 0, 0, 0, 1]]).astype(
                 np.float32)
             dataset['train_seq'] = np.array([[VOCAB.index(c) for c in seq] for seq in all_seq])[permute]
 
         # load test set
-        all_id, all_seq, adjacency_matrix, all_struct = lib.rna_utils. \
-            fold_rna_from_file(path_template.format(rbp, 'test_sample_0', 'sequences.fa.gz'), pool)
+        all_id, all_seq, matrix, all_struct = lib.rna_utils. \
+            fold_rna_from_file(path_template.format(rbp, 'test_sample_0', 'sequences.fa.gz'), pool,
+                               fold_algo, sampling)
+
+        if sampling:
+            adjacency_matrix, probability_matrix = matrix
+        else:
+            adjacency_matrix = matrix
 
         dataset['test_label'] = np.array([int(id.split(' ')[-1].split(':')[-1]) for id in all_id])
         dataset['test_adj_mat'] = adjacency_matrix
+        if sampling:
+            dataset['test_prob_mat'] = probability_matrix
+        if kwargs.get('augment_features', False):
+            dataset['test_features'] = augment_features(path_template.format(rbp, 'test_sample_0', ''))
 
-        additional_features = augment_features(path_template.format(rbp, 'test_sample_0', ''))
-        dataset['test_features'] = additional_features
-        dataset['test_struct'] = np.array([['.()'.index(c) for c in struct] for struct in all_struct])
+        # dataset['test_struct'] = np.array([['.()'.index(c) for c in struct] for struct in all_struct])
 
         if use_embedding:
             kmers = get_kmers(all_seq, kmer_len)
@@ -116,9 +142,9 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
                 vec_seq = VOCAB_VEC[VOCAB.index(se)]
                 vec_struct = VOCAB_STRUCT_VEC[VOCAB_STRUCT.index(st)]
                 if mode == 'concatenation':
-                    TOTAL_VOCAB_VEC.append(np.concatenate([vec_seq, vec_struct])) # dim = 5 + 3
+                    TOTAL_VOCAB_VEC.append(np.concatenate([vec_seq, vec_struct]))  # dim = 5 + 3
                 elif mode == 'product':
-                    vec = [0] * (len(VOCAB[1:]) * len(VOCAB_STRUCT)) # dim = 5 * 3
+                    vec = [0] * (len(VOCAB[1:]) * len(VOCAB_STRUCT))  # dim = 5 * 3
                     vec[(VOCAB.index(se) - 1) * len(VOCAB_STRUCT) + VOCAB_STRUCT.index(st)] = 1
                     TOTAL_VOCAB_VEC.append(vec)
                 else:
@@ -127,12 +153,12 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
 
             for prefix in ['train', 'test']:
                 all_seq = []
-                for seq, struct in zip(dataset['%s_seq'%(prefix)], dataset['%s_struct'%(prefix)]):
+                for seq, struct in zip(dataset['%s_seq' % (prefix)], dataset['%s_struct' % (prefix)]):
                     merged_seq = []
                     for se_idx, st_idx in zip(seq, struct):
                         merged_seq.append(TOTAL_VOCAB.index(VOCAB[se_idx] + VOCAB_STRUCT[st_idx]))
                     all_seq.append(merged_seq)
-                dataset['%s_seq'%(prefix)] = np.array(all_seq)
+                dataset['%s_seq' % (prefix)] = np.array(all_seq)
 
             dataset['VOCAB'] = TOTAL_VOCAB
             dataset['VOCAB_VEC'] = TOTAL_VOCAB_VEC
@@ -156,9 +182,9 @@ def get_kmers(seqs, kmer_len):
     for seq in seqs:
         kmers = []
         length = len(seq)
-        seq = 'N'*left + seq + 'N' * (right - 1)
+        seq = 'N' * left + seq + 'N' * (right - 1)
         for j in range(left, left + length):
-            kmers.append(seq[j-left: j + right])
+            kmers.append(seq[j - left: j + right])
         sentence.append(kmers)
     return sentence
 
@@ -182,10 +208,10 @@ def load_toy_data(load_hairpin, return_label, p=None, element_symbol='m'):
     dataset = {}
 
     if load_hairpin:
-        all_seq, adjacency_matrix, all_labels, all_struct = lib.rna_utils.\
+        all_seq, adjacency_matrix, all_labels, all_struct = lib.rna_utils. \
             generate_hairpin_dataset(80000, 101, pool, return_label)
     else:
-        all_seq, adjacency_matrix, all_labels, all_struct = lib.rna_utils.\
+        all_seq, adjacency_matrix, all_labels, all_struct = lib.rna_utils. \
             generate_element_dataset(80000, 101, element_symbol, pool, return_label)
 
     if return_label:
@@ -196,7 +222,7 @@ def load_toy_data(load_hairpin, return_label, p=None, element_symbol='m'):
         neg_idx = np.where(np.count_nonzero(all_labels, axis=-1) == 0)[0]
 
     all_idx = np.concatenate([pos_idx,
-                              neg_idx[np.random.permutation(len(neg_idx))[:2*len(pos_idx)]]], axis=0)
+                              neg_idx[np.random.permutation(len(neg_idx))[:2 * len(pos_idx)]]], axis=0)
     size = len(all_idx)
     permute = np.random.permutation(size)
 
@@ -226,7 +252,7 @@ def load_toy_data(load_hairpin, return_label, p=None, element_symbol='m'):
 
 
 if __name__ == "__main__":
-    dataset = load_clip_seq(use_embedding=True)
+    dataset = load_clip_seq(use_embedding=False, sampling=False)
     # print(len(np.where(dataset[0]['train_label'] == 1)[0]))
     # dataset = load_toy_data()
     # print(dataset['train_seq'].shape)

@@ -89,31 +89,32 @@ def att_gcl(name, inputs, units, reuse=True, expr_simplified_att=False):
                 transpose_b=True
             ) + bias_mat)
 
+            # att_weights = tf.nn.softmax(
+            #     tf.nn.leaky_relu(
+            #         linear('message_attention_simplified_l', units, 1, annotations, biases=False) + \
+            #         tf.transpose(linear('message_attention_simplified_r', units, 1, annotations, biases=False),
+            #                      [0, 2, 1])
+            #     ) + bias_mat)
+
         else:
-            att_weights = tf.nn.softmax(
-                tf.nn.leaky_relu(
-                    linear('message_attention_simplified_l', units, 1, annotations, biases=False) + \
-                    tf.transpose(linear('message_attention_simplified_r', units, 1, annotations, biases=False),
-                                 [0, 2, 1])
-                ) + bias_mat)
-            # '''note, messages haven't been passed yet'''
-            # '''second step: compute scores by comparing the messages within each relation'''
-            # '''multiplicative style'''
-            # # [batch_size, nb_bonds, length, units]
-            # output_rel_first = tf.transpose(output_by_rel, (0, 3, 1, 2))
-            # # [batch_size, length, length, nb_bonds]
-            # scores_by_rel = tf.transpose(
-            #     tf.matmul(
-            #         linear('message_attention', units, units, output_rel_first, biases=False),
-            #         output_rel_first,
-            #         transpose_b=True),
-            #     (0, 2, 3, 1)
-            # )
-            # # select scores by relation
-            # sum_rel = tf.reduce_sum(tf.multiply(scores_by_rel, adj_tensor), axis=-1)
-            #
-            # # node level attention
-            # att_weights = tf.nn.softmax(sum_rel + bias_mat)
+            '''note, messages haven't been passed yet'''
+            '''second step: compute scores by comparing the messages within each relation'''
+            '''multiplicative style'''
+            # [batch_size, nb_bonds, length, units]
+            output_rel_first = tf.transpose(output_by_rel, (0, 3, 1, 2))
+            # [batch_size, length, length, nb_bonds]
+            scores_by_rel = tf.transpose(
+                tf.matmul(
+                    linear('message_attention', units, units, output_rel_first, biases=False),
+                    output_rel_first,
+                    transpose_b=True),
+                (0, 2, 3, 1)
+            )
+            # select scores by relation
+            sum_rel = tf.reduce_sum(tf.multiply(scores_by_rel, adj_tensor), axis=-1)
+
+            # node level attention
+            att_weights = tf.nn.softmax(sum_rel + bias_mat)
 
         hidden_tensor = tf.reduce_sum(pre_sum * att_weights[:, :, :, None], axis=2)
 

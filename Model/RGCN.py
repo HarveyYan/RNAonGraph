@@ -42,6 +42,7 @@ class RGCN:
         self.expr_simplified_attention = kwargs.get('expr_simplified_attention', False)
         self.lstm_ggnn = kwargs.get('lstm_ggnn', False)
         self.use_conv = kwargs.get('use_conv', True)
+        self.sampling = kwargs.get('sampling', True)
 
         # use additional node features
         self.augment_features = kwargs.get('augment_features', False)
@@ -67,7 +68,7 @@ class RGCN:
                     if self.test_gated_nn:
                         self._build_ggnn(i, mode='training')
                     else:
-                        raise ValueError('rgcn model has been excluded')
+                        raise ValueError('non gated model has been excluded')
                         # self._build_rgcn(i, mode='training')
                     self._loss(i)
                     self._train(i)
@@ -76,7 +77,7 @@ class RGCN:
                 if self.test_gated_nn:
                     self._build_ggnn(None, mode='inference')
                 else:
-                    raise ValueError('rgcn model has been excluded')
+                    raise ValueError('non gated model has been excluded')
                     # self._build_rgcn(None, mode='inference')
 
                 self._merge()
@@ -94,12 +95,17 @@ class RGCN:
         if self.augment_features:
             self.features = tf.placeholder(tf.float32, shape=[None, self.max_len, self.features_dim])
             self.features_splits = tf.split(self.features, len(self.gpu_device_list))
+            self.inference_features = tf.placeholder(tf.float32, shape=[None, self.max_len, self.features_dim])
 
         self.adj_mat_ph = tf.placeholder(tf.int32, shape=[None, self.max_len, self.max_len])
         self.adj_mat_splits = tf.split(tf.one_hot(self.adj_mat_ph, self.edge_dim), len(self.gpu_device_list))
 
+        if self.sampling:
+            self.prob_mat_ph = tf.placeholder(tf.float32, shape=[None, self.max_len, self.max_len])
+            self.prob_mat_splits = tf.split(self.prob_mat_ph, len(self.gpu_device_list))
+            self.inference_prob_mat_ph = tf.placeholder(tf.float32, shape=[None, self.max_len, self.max_len])
+
         self.inference_node_ph = tf.placeholder(tf.int32, shape=[None, self.max_len])
-        self.inference_features = tf.placeholder(tf.float32, shape=[None, self.max_len, self.features_dim])
         self.inference_adj_mat_ph = tf.placeholder(tf.int32, shape=[None, self.max_len, self.max_len])
         self.inference_adj_mat = tf.one_hot(self.inference_adj_mat_ph, self.edge_dim)
 
@@ -124,11 +130,15 @@ class RGCN:
             adj_tensor = self.adj_mat_splits[split_idx]
             if self.augment_features:
                 features = self.features_splits[split_idx]
+            if self.sampling:
+                prob_mat = self.prob_mat_splits[split_idx]
         elif mode == 'inference':
             node_tensor = self.inference_node_ph
             adj_tensor = self.inference_adj_mat
             if self.augment_features:
                 features = self.inference_features
+            if self.sampling:
+                prob_mat = self.inference_prob_mat_ph
         else:
             raise ValueError('unknown mode')
 
@@ -136,6 +146,9 @@ class RGCN:
             embedding = tf.get_variable('embedding_layer', shape=(self.vocab_size, self.node_dim),
                                         initializer=tf.constant_initializer(self.embedding_vec), trainable=False)
         node_tensor = tf.nn.embedding_lookup(embedding, node_tensor)
+
+        if self.sampling:
+            adj_tensor = adj_tensor * prob_mat[:, :, None]  # assigning probabilities to relations
 
         if self.augment_features:
             node_tensor = tf.concat([node_tensor, features], axis=-1)
@@ -171,7 +184,8 @@ class RGCN:
                 if self.use_attention:
                     all_msg_tensor = []
                     for head in range(1):
-                        msg_tensor = att_gcl(name+'_head_%d'%(head), (adj_tensor, hidden_tensor, node_tensor), self.units,
+                        msg_tensor = att_gcl(name + '_head_%d' % (head), (adj_tensor, hidden_tensor, node_tensor),
+                                             self.units,
                                              reuse=self.reuse_weights)
                         all_msg_tensor.append(msg_tensor)
                     msg_tensor = tf.add_n(all_msg_tensor) / len(all_msg_tensor)
@@ -223,12 +237,6 @@ class RGCN:
         output = lib.ops.Linear.linear('OutputMapping', output.get_shape().as_list()[-1], 2,
                                        output)  # categorical logits
 
-        # with tf.variable_scope('graph_aggregration'):
-        #     gated_outputs = tf.nn.sigmoid(
-        #         lib.ops.Linear.linear('sigmoid_gate_in', 2 * self.units, 1, output)) * \
-        #                     lib.ops.Linear.linear('gate_transformation', self.units, 2, hidden_tensor)
-        #     output = tf.reduce_sum(gated_outputs, axis=1)
-
         if mode == 'training':
             if not hasattr(self, 'output'):
                 self.output = [output]
@@ -239,17 +247,6 @@ class RGCN:
 
     def _loss(self, split_idx):
         prediction = tf.nn.softmax(self.output[split_idx])
-
-        # binary cross entropy loss
-        # prediction = tf.nn.sigmoid(self.output[split_idx])
-        # z * -log(sigmoid(x)) + (1 - z) * -log(1 - sigmoid(x))
-        # labels = tf.cast(self.labels_split[split_idx], tf.float32)
-        # cost = - tf.reduce_mean(labels * tf.log(prediction) + (1 - labels) * tf.log(1 - prediction))
-        # cost = tf.reduce_mean(
-        #     tf.nn.sigmoid_cross_entropy_with_logits(
-        #         logits=self.output[split_idx],
-        #         labels=tf.cast(self.labels_split[split_idx], tf.float32)
-        #     ))
 
         cost = tf.reduce_mean(
             tf.nn.softmax_cross_entropy_with_logits(
@@ -324,24 +321,6 @@ class RGCN:
                 self.inference_prediction[:, :, 1], [-1]),
         )
 
-        # self.acc_val, self.acc_update_op = tf.metrics.accuracy(
-        #     labels=self.labels,
-        #     predictions=tf.cast(tf.greater(self.prediction, 0.5), tf.int32),
-        # )
-        # self.auc_val, self.auc_update_op = tf.metrics.auc(
-        #     labels=self.labels,
-        #     predictions=self.prediction,
-        # )
-        # self.inference_prediction = tf.nn.sigmoid(self.inference_output)
-        # self.inference_acc_val, self.inference_acc_update_op = tf.metrics.accuracy(
-        #     labels=self.labels,
-        #     predictions=tf.cast(tf.greater(self.inference_prediction, 0.5), tf.int32),
-        # )
-        # self.inference_auc_val, self.inference_auc_update_op = tf.metrics.auc(
-        #     labels=self.labels,
-        #     predictions=self.inference_prediction,
-        # )
-
     def _init_session(self):
         gpu_options = tf.GPUOptions()
         gpu_options.allow_growth = True
@@ -361,7 +340,14 @@ class RGCN:
     def fit(self, X, y, epochs, batch_size, output_dir, dev_data=None, dev_targets=None, logging=False):
         checkpoints_dir = os.path.join(output_dir, 'checkpoints/')
         os.makedirs(checkpoints_dir)
-        node_tensor, adj_mat, features = X
+        if self.augment_features:
+            node_tensor, mat, features = X
+        else:
+            node_tensor, mat = X
+        if self.sampling:
+            (adj_mat, prob_mat) = mat
+        else:
+            adj_mat = mat
         if dev_data is None or dev_targets is None:
             # split validation set
             if self.return_label:
@@ -375,28 +361,64 @@ class RGCN:
             train_idx = np.delete(np.arange(len(y)), dev_idx)
             dev_node_tensor = node_tensor[dev_idx]
             dev_adj_mat = adj_mat[dev_idx]
-            dev_features = features[dev_idx]
             dev_targets = y[dev_idx]
+            if self.augment_features:
+                dev_features = features[dev_idx]
+            if self.sampling:
+                dev_prob_mat = prob_mat[dev_idx]
 
             node_tensor = node_tensor[train_idx]
             adj_mat = adj_mat[train_idx]
-            features = features[train_idx]
             y = y[train_idx]
+            if self.augment_features:
+                features = features[train_idx]
+            if self.sampling:
+                prob_mat = prob_mat[train_idx]
         else:
-            dev_node_tensor, dev_adj_mat, dev_features = dev_data
+            if self.augment_features:
+                dev_node_tensor, dev_mat, dev_features = dev_data
+            else:
+                dev_node_tensor, dev_mat = dev_data
+            if self.sampling:
+                (dev_adj_mat, dev_prob_mat) = dev_mat
+            else:
+                dev_adj_mat = dev_mat
+
         # batch size should be a multiple of len(self.gpu_device_list)
         dev_rmd = dev_node_tensor.shape[0] % len(self.gpu_device_list)
         if dev_rmd != 0:
             dev_node_tensor = dev_node_tensor[:-dev_rmd]
             dev_adj_mat = dev_adj_mat[:-dev_rmd]
-            dev_features = dev_features[:-dev_rmd]
             dev_targets = dev_targets[:-dev_rmd]
+            if self.augment_features:
+                dev_features = dev_features[:-dev_rmd]
+            if self.sampling:
+                dev_prob_mat = dev_prob_mat[:-dev_rmd]
+
+        if self.sampling:
+            dev_data = [dev_node_tensor, (dev_adj_mat, dev_prob_mat)]
+        else:
+            dev_data = [dev_node_tensor, dev_adj_mat]
+        if self.augment_features:
+            dev_data.append(dev_features)
+
         train_rmd = node_tensor.shape[0] % len(self.gpu_device_list)
         if train_rmd != 0:
             node_tensor = node_tensor[:-train_rmd]
             adj_mat = adj_mat[:-train_rmd]
-            features = features[:-train_rmd]
             y = y[:-train_rmd]
+            if self.augment_features:
+                features = features[:-train_rmd]
+            if self.sampling:
+                prob_mat = prob_mat[:-train_rmd]
+
+        if self.sampling:
+            train_data = [node_tensor, (adj_mat, prob_mat)]
+        else:
+            dev_data = [node_tensor, adj_mat]
+        if self.augment_features:
+            train_data.append(features)
+
         size_train = node_tensor.shape[0]
         iters_per_epoch = size_train // batch_size + (0 if size_train % batch_size == 0 else 1)
         best_dev_cost = np.inf
@@ -408,15 +430,16 @@ class RGCN:
             permute = np.random.permutation(size_train)
             node_tensor = node_tensor[permute]
             adj_mat = adj_mat[permute]
-            features = features[permute]
+            if self.augment_features:
+                features = features[permute]
+            if self.sampling:
+                prob_mat = prob_mat[permute]
             y = y[permute]
             for i in range(iters_per_epoch):
-                _node_tensor, _adj_mat, _features, _labels \
+                _node_tensor, _adj_mat, _labels \
                     = node_tensor[i * batch_size: (i + 1) * batch_size], \
                       adj_mat[i * batch_size: (i + 1) * batch_size], \
-                      features[i * batch_size: (i + 1) * batch_size], \
                       y[i * batch_size: (i + 1) * batch_size]
-
                 feed_dict = {
                     self.node_input_ph: _node_tensor,
                     self.adj_mat_ph: _adj_mat,
@@ -425,19 +448,22 @@ class RGCN:
                     self.hf_iters_per_epoch: iters_per_epoch // 2,
                     self.is_training_ph: True
                 }
+
                 if self.augment_features:
+                    _features = features[i * batch_size: (i + 1) * batch_size]
                     feed_dict[self.features] = _features
+                if self.sampling:
+                    _prob_mat = prob_mat[i * batch_size: (i + 1) * batch_size]
+                    feed_dict[self.prob_mat_ph] = _prob_mat
 
                 self.sess.run(self.train_op, feed_dict)
 
-            train_cost, train_acc, train_auc = \
-                self.evaluate((node_tensor, adj_mat, features), y, batch_size)
+            train_cost, train_acc, train_auc = self.evaluate(train_data, y, batch_size)
             lib.plot.plot('train_cost', train_cost)
             lib.plot.plot('train_acc', train_acc)
             lib.plot.plot('train_auc', train_auc)
 
-            dev_cost, dev_acc, dev_auc = \
-                self.evaluate((dev_node_tensor, dev_adj_mat, dev_features), dev_targets, batch_size)
+            dev_cost, dev_acc, dev_auc = self.evaluate(dev_data, dev_targets, batch_size)
             lib.plot.plot('dev_cost', dev_cost)
             lib.plot.plot('dev_acc', dev_acc)
             lib.plot.plot('dev_auc', dev_auc)
@@ -469,21 +495,31 @@ class RGCN:
             logger.close()
 
     def evaluate(self, X, y, batch_size):
-        node_tensor, adj_mat, features = X
+        if self.augment_features:
+            node_tensor, mat, features = X
+        else:
+            node_tensor, mat = X
+        if self.sampling:
+            (adj_mat, prob_mat) = mat
+        else:
+            adj_mat = mat
         all_cost = 0.
         iters_per_epoch = len(node_tensor) // batch_size + (0 if len(node_tensor) % batch_size == 0 else 1)
         for i in range(iters_per_epoch):
-            _node_tensor, _adj_mat, _features, _labels \
+            _node_tensor, _adj_mat, _labels \
                 = node_tensor[i * batch_size: (i + 1) * batch_size], \
                   adj_mat[i * batch_size: (i + 1) * batch_size], \
-                  features[i * batch_size: (i + 1) * batch_size], \
                   y[i * batch_size: (i + 1) * batch_size]
             feed_dict = {self.node_input_ph: _node_tensor,
                          self.adj_mat_ph: _adj_mat,
                          self.labels: _labels,
                          self.is_training_ph: False}
             if self.augment_features:
+                _features = features[i * batch_size: (i + 1) * batch_size]
                 feed_dict[self.features] = _features
+            if self.sampling:
+                _prob_mat = prob_mat[i * batch_size: (i + 1) * batch_size]
+                feed_dict[self.prob_mat_ph] = _prob_mat
             cost, _, _ = self.sess.run([self.cost, self.acc_update_op, self.auc_update_op], feed_dict)
             all_cost += cost * len(_node_tensor)
         acc, auc = self.sess.run([self.acc_val, self.auc_val])
@@ -491,22 +527,33 @@ class RGCN:
         return all_cost / len(node_tensor), acc, auc
 
     def predict(self, X, batch_size, y=None):
-        node_tensor, adj_mat, features = X
+        if self.augment_features:
+            node_tensor, mat, features = X
+        else:
+            node_tensor, mat = X
+        if self.sampling:
+            (adj_mat, prob_mat) = mat
+        else:
+            adj_mat = mat
         all_predicton = []
         iters = len(node_tensor) // batch_size + (0 if len(node_tensor) % batch_size == 0 else 1)
         for i in range(iters):
-            _node_tensor, _adj_mat, _features = node_tensor[i * batch_size:(i + 1) * batch_size], \
-                                                adj_mat[i * batch_size:(i + 1) * batch_size], \
-                                                features[i * batch_size:(i + 1) * batch_size]
-
+            _node_tensor, _adj_mat = node_tensor[i * batch_size:(i + 1) * batch_size], \
+                                     adj_mat[i * batch_size:(i + 1) * batch_size]
             feed_dict = {
                 self.inference_node_ph: _node_tensor,
                 self.inference_adj_mat_ph: _adj_mat,
                 self.is_training_ph: False
             }
-            feed_tensor = [self.inference_prediction]
             if self.augment_features:
-                feed_dict[self.inference_features] = _features
+                _features = features[i * batch_size: (i + 1) * batch_size]
+                feed_dict[self.features] = _features
+            if self.sampling:
+                _prob_mat = prob_mat[i * batch_size: (i + 1) * batch_size]
+                feed_dict[self.prob_mat_ph] = _prob_mat
+
+            feed_tensor = [self.inference_prediction]
+
             if y is not None:
                 _labels = y[i * batch_size:(i + 1) * batch_size]
                 feed_dict[self.labels] = _labels

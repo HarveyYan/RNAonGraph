@@ -80,9 +80,9 @@ class RNATracker:
         if self.augment_features:
             self.features = tf.placeholder(tf.float32, shape=[None, self.max_len, self.features_dim])
             self.features_splits = tf.split(self.features, len(self.gpu_device_list))
+            self.inference_features = tf.placeholder(tf.float32, shape=[None, self.max_len, self.features_dim])
 
         self.inference_node_ph = tf.placeholder(tf.int32, shape=[None, self.max_len])
-        self.inference_features = tf.placeholder(tf.float32, shape=[None, self.max_len, self.features_dim])
 
         if self.return_label:
             self.labels = tf.placeholder(tf.int32, shape=[None])  # binary

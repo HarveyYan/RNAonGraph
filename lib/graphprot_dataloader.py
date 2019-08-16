@@ -27,17 +27,16 @@ BOND_TYPE = {
 
 if len(all_rbps) == 0:
     print('reorganizing grpahprot dataset')
-
-
     def __reorganize_dir():
-        all_rbps = [dir.split('.')[0] for dir in os.listdir(clip_data_path)]
+        all_rbps = set([dir.split('.')[0] for dir in os.listdir(clip_data_path)])
         path_template = os.path.join(basedir, 'Data', 'GraphProt_CLIP_sequences', '{}.{}.{}.fa')
         for rbp in all_rbps:
             for split in ['train', 'ls']:
                 for label in ['positives', 'negatives']:
-                    dir_to = os.path.join(os.path.dirname(path_template), split, label)
-                    os.makedirs(dir_to)
-                    os.rename(path_template % (rbp, split, label), os.path.join(dir_to, 'data.fa'))
+                    dir_to = os.path.join(os.path.dirname(path_template), rbp, split, label)
+                    if not os.path.exists(dir_to):
+                        os.makedirs(dir_to)
+                    os.rename(path_template.format(rbp, split, label), os.path.join(dir_to, 'data.fa'))
 
 
     __reorganize_dir()
@@ -190,61 +189,5 @@ def pretrain_word2vec(seqs, kmer_len, window, embedding_size, save_path):
     model.save(save_path)
 
 
-def load_toy_data(load_hairpin, return_label, p=None, element_symbol='m'):
-    if p is None:
-        pool = Pool(8)
-    else:
-        pool = p
-
-    dataset = {}
-
-    if load_hairpin:
-        all_seq, adjacency_matrix, all_labels, all_struct = lib.rna_utils. \
-            generate_hairpin_dataset(80000, 101, pool, return_label)
-    else:
-        all_seq, adjacency_matrix, all_labels, all_struct = lib.rna_utils. \
-            generate_element_dataset(80000, 101, element_symbol, pool, return_label)
-
-    if return_label:
-        pos_idx = np.where(all_labels == 1)[0]
-        neg_idx = np.where(all_labels == 0)[0]
-    else:
-        pos_idx = np.where(np.count_nonzero(all_labels, axis=-1) > 0)[0]
-        neg_idx = np.where(np.count_nonzero(all_labels, axis=-1) == 0)[0]
-
-    all_idx = np.concatenate([pos_idx,
-                              neg_idx[np.random.permutation(len(neg_idx))[:2 * len(pos_idx)]]], axis=0)
-    size = len(all_idx)
-    permute = np.random.permutation(size)
-
-    all_seq = all_seq[all_idx][permute]
-    adjacency_matrix = adjacency_matrix[all_idx][permute]
-    all_labels = all_labels[all_idx][permute]
-    all_struct = all_struct[all_idx][permute]
-
-    dataset['test_label'] = all_labels[:int(0.1 * size)]
-    dataset['test_seq'] = all_seq[:int(0.1 * size)]
-    dataset['test_adj_mat'] = adjacency_matrix[:int(0.1 * size)]
-    dataset['test_struct'] = all_struct[:int(0.1 * size)]
-
-    dataset['train_label'] = all_labels[int(0.1 * size):]
-    dataset['train_seq'] = all_seq[int(0.1 * size):]
-    dataset['train_adj_mat'] = adjacency_matrix[int(0.1 * size):]
-    dataset['train_struct'] = all_struct[int(0.1 * size):]
-
-    dataset['VOCAB'] = 'ACGT'
-    dataset['VOCAB_VEC'] = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]).astype(np.float32)
-
-    if p is None:
-        pool.close()
-        pool.join()
-
-    return dataset
-
-
 if __name__ == "__main__":
-    dataset = load_clip_seq(use_embedding=True)
-    # print(len(np.where(dataset[0]['train_label'] == 1)[0]))
-    # dataset = load_toy_data()
-    # print(dataset['train_seq'].shape)
-    # print(dataset['train_label'].shape)
+    dataset = load_clip_seq(use_embedding=False)
