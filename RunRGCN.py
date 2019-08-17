@@ -85,7 +85,7 @@ def run_one_rbp(idx, q):
         hp['features_dim'] = dataset['train_features'].shape[-1]
     model = RGCN(MAX_LEN, dataset['VOCAB_VEC'].shape[1], len(lib.dataloader.BOND_TYPE),
                  dataset['VOCAB_VEC'], DEVICES, **hp)
-
+    # preparing data for training
     if FLAGS.sampling:
         train_data = [dataset['train_seq'], (dataset['train_adj_mat'], dataset['train_prob_mat'])]
     else:
@@ -93,7 +93,7 @@ def run_one_rbp(idx, q):
     if FLAGS.augment_features:
         train_data.append(dataset['train_features'])
     model.fit(train_data, dataset['train_label'], EPOCHS, BATCH_SIZE, rbp_output, logging=True)
-
+    # preparing data for testing
     if FLAGS.sampling:
         test_data = [dataset['test_seq'], (dataset['test_adj_mat'], dataset['test_prob_mat'])]
     else:
