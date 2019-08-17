@@ -52,8 +52,6 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
             matrix = lib.rna_utils.load_mat(filepath, pool, fold_algo, sampling)
             if sampling:
                 adjacency_matrix, probability_matrix = matrix
-                print(adjacency_matrix.shape)
-                print(probability_matrix.shape)
                 dataset['train_prob_mat'] = probability_matrix[permute]
             else:
                 adjacency_matrix = matrix

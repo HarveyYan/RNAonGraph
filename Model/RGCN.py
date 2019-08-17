@@ -415,7 +415,7 @@ class RGCN:
         if self.sampling:
             train_data = [node_tensor, (adj_mat, prob_mat)]
         else:
-            dev_data = [node_tensor, adj_mat]
+            train_data = [node_tensor, adj_mat]
         if self.augment_features:
             train_data.append(features)
 
