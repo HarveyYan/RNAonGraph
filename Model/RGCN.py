@@ -148,7 +148,7 @@ class RGCN:
         node_tensor = tf.nn.embedding_lookup(embedding, node_tensor)
 
         if self.sampling:
-            adj_tensor = adj_tensor * prob_mat[:, :, None]  # assigning probabilities to relations
+            adj_tensor = adj_tensor * prob_mat[:, :, :,  None]  # assigning probabilities to relations
 
         if self.augment_features:
             node_tensor = tf.concat([node_tensor, features], axis=-1)
@@ -418,6 +418,7 @@ class RGCN:
             train_data = [node_tensor, adj_mat]
         if self.augment_features:
             train_data.append(features)
+        train_targets = y
 
         size_train = node_tensor.shape[0]
         iters_per_epoch = size_train // batch_size + (0 if size_train % batch_size == 0 else 1)
@@ -458,7 +459,7 @@ class RGCN:
 
                 self.sess.run(self.train_op, feed_dict)
 
-            train_cost, train_acc, train_auc = self.evaluate(train_data, y, batch_size)
+            train_cost, train_acc, train_auc = self.evaluate(train_data, train_targets, batch_size)
             lib.plot.plot('train_cost', train_cost)
             lib.plot.plot('train_acc', train_acc)
             lib.plot.plot('train_auc', train_auc)

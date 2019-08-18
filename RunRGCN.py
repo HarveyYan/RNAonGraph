@@ -34,7 +34,7 @@ FLAGS = tf.app.flags.FLAGS
 if FLAGS.use_smaller_clip_seq:
     lib.dataloader.path_template = lib.dataloader.path_template.replace('30000', '5000')
 
-BATCH_SIZE = 100  # * FLAGS.nb_gpus if FLAGS.nb_gpus > 0 else 200
+BATCH_SIZE = 200  # * FLAGS.nb_gpus if FLAGS.nb_gpus > 0 else 200
 EPOCHS = FLAGS.epochs  # How many iterations to train for
 DEVICES = ['/gpu:%d' % (i) for i in range(FLAGS.nb_gpus)] if FLAGS.nb_gpus > 0 else ['/cpu:0']
 RBP_LIST = lib.dataloader.all_rbps
