@@ -42,7 +42,7 @@ class RGCN:
         self.expr_simplified_attention = kwargs.get('expr_simplified_attention', False)
         self.lstm_ggnn = kwargs.get('lstm_ggnn', False)
         self.use_conv = kwargs.get('use_conv', True)
-        self.sampling = kwargs.get('sampling', True)
+        self.probabilistic = kwargs.get('probabilistic', True)
 
         # use additional node features
         self.augment_features = kwargs.get('augment_features', False)
@@ -100,7 +100,7 @@ class RGCN:
         self.adj_mat_ph = tf.placeholder(tf.int32, shape=[None, self.max_len, self.max_len])
         self.adj_mat_splits = tf.split(tf.one_hot(self.adj_mat_ph, self.edge_dim), len(self.gpu_device_list))
 
-        if self.sampling:
+        if self.probabilistic:
             self.prob_mat_ph = tf.placeholder(tf.float32, shape=[None, self.max_len, self.max_len])
             self.prob_mat_splits = tf.split(self.prob_mat_ph, len(self.gpu_device_list))
             self.inference_prob_mat_ph = tf.placeholder(tf.float32, shape=[None, self.max_len, self.max_len])
@@ -130,14 +130,14 @@ class RGCN:
             adj_tensor = self.adj_mat_splits[split_idx]
             if self.augment_features:
                 features = self.features_splits[split_idx]
-            if self.sampling:
+            if self.probabilistic:
                 prob_mat = self.prob_mat_splits[split_idx]
         elif mode == 'inference':
             node_tensor = self.inference_node_ph
             adj_tensor = self.inference_adj_mat
             if self.augment_features:
                 features = self.inference_features
-            if self.sampling:
+            if self.probabilistic:
                 prob_mat = self.inference_prob_mat_ph
         else:
             raise ValueError('unknown mode')
@@ -147,7 +147,7 @@ class RGCN:
                                         initializer=tf.constant_initializer(self.embedding_vec), trainable=False)
         node_tensor = tf.nn.embedding_lookup(embedding, node_tensor)
 
-        if self.sampling:
+        if self.probabilistic:
             adj_tensor = adj_tensor * prob_mat[:, :, :,  None]  # assigning probabilities to relations
 
         if self.augment_features:
@@ -344,7 +344,7 @@ class RGCN:
             node_tensor, mat, features = X
         else:
             node_tensor, mat = X
-        if self.sampling:
+        if self.probabilistic:
             (adj_mat, prob_mat) = mat
         else:
             adj_mat = mat
@@ -364,7 +364,7 @@ class RGCN:
             dev_targets = y[dev_idx]
             if self.augment_features:
                 dev_features = features[dev_idx]
-            if self.sampling:
+            if self.probabilistic:
                 dev_prob_mat = prob_mat[dev_idx]
 
             node_tensor = node_tensor[train_idx]
@@ -372,14 +372,14 @@ class RGCN:
             y = y[train_idx]
             if self.augment_features:
                 features = features[train_idx]
-            if self.sampling:
+            if self.probabilistic:
                 prob_mat = prob_mat[train_idx]
         else:
             if self.augment_features:
                 dev_node_tensor, dev_mat, dev_features = dev_data
             else:
                 dev_node_tensor, dev_mat = dev_data
-            if self.sampling:
+            if self.probabilistic:
                 (dev_adj_mat, dev_prob_mat) = dev_mat
             else:
                 dev_adj_mat = dev_mat
@@ -392,10 +392,10 @@ class RGCN:
             dev_targets = dev_targets[:-dev_rmd]
             if self.augment_features:
                 dev_features = dev_features[:-dev_rmd]
-            if self.sampling:
+            if self.probabilistic:
                 dev_prob_mat = dev_prob_mat[:-dev_rmd]
 
-        if self.sampling:
+        if self.probabilistic:
             dev_data = [dev_node_tensor, (dev_adj_mat, dev_prob_mat)]
         else:
             dev_data = [dev_node_tensor, dev_adj_mat]
@@ -409,10 +409,10 @@ class RGCN:
             y = y[:-train_rmd]
             if self.augment_features:
                 features = features[:-train_rmd]
-            if self.sampling:
+            if self.probabilistic:
                 prob_mat = prob_mat[:-train_rmd]
 
-        if self.sampling:
+        if self.probabilistic:
             train_data = [node_tensor, (adj_mat, prob_mat)]
         else:
             train_data = [node_tensor, adj_mat]
@@ -433,7 +433,7 @@ class RGCN:
             adj_mat = adj_mat[permute]
             if self.augment_features:
                 features = features[permute]
-            if self.sampling:
+            if self.probabilistic:
                 prob_mat = prob_mat[permute]
             y = y[permute]
             for i in range(iters_per_epoch):
@@ -453,7 +453,7 @@ class RGCN:
                 if self.augment_features:
                     _features = features[i * batch_size: (i + 1) * batch_size]
                     feed_dict[self.features] = _features
-                if self.sampling:
+                if self.probabilistic:
                     _prob_mat = prob_mat[i * batch_size: (i + 1) * batch_size]
                     feed_dict[self.prob_mat_ph] = _prob_mat
 
@@ -500,7 +500,7 @@ class RGCN:
             node_tensor, mat, features = X
         else:
             node_tensor, mat = X
-        if self.sampling:
+        if self.probabilistic:
             (adj_mat, prob_mat) = mat
         else:
             adj_mat = mat
@@ -518,7 +518,7 @@ class RGCN:
             if self.augment_features:
                 _features = features[i * batch_size: (i + 1) * batch_size]
                 feed_dict[self.features] = _features
-            if self.sampling:
+            if self.probabilistic:
                 _prob_mat = prob_mat[i * batch_size: (i + 1) * batch_size]
                 feed_dict[self.prob_mat_ph] = _prob_mat
             cost, _, _ = self.sess.run([self.cost, self.acc_update_op, self.auc_update_op], feed_dict)
@@ -532,7 +532,7 @@ class RGCN:
             node_tensor, mat, features = X
         else:
             node_tensor, mat = X
-        if self.sampling:
+        if self.probabilistic:
             (adj_mat, prob_mat) = mat
         else:
             adj_mat = mat
@@ -548,10 +548,10 @@ class RGCN:
             }
             if self.augment_features:
                 _features = features[i * batch_size: (i + 1) * batch_size]
-                feed_dict[self.features] = _features
-            if self.sampling:
+                feed_dict[self.inference_features] = _features
+            if self.probabilistic:
                 _prob_mat = prob_mat[i * batch_size: (i + 1) * batch_size]
-                feed_dict[self.prob_mat_ph] = _prob_mat
+                feed_dict[self.inference_prob_mat_ph] = _prob_mat
 
             feed_tensor = [self.inference_prediction]
 

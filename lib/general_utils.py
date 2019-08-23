@@ -41,7 +41,7 @@ def compare_two_csvs(path_to_csv_1, path_to_csv_2, experiment, axis_name_1, axis
     auc_1 = np.array(file1['auc'][:len(file2['auc'])]).round(roundto)
     auc_2 = np.array(file2['auc']).round(roundto)
 
-    fig = plt.figure(figsize=(12, 12))
+    fig = plt.figure(figsize=(5, 5))
     fig.add_subplot(111)
     plt.title(experiment)
     plt.plot([0, 1], [0, 1], 'k--')
@@ -51,10 +51,10 @@ def compare_two_csvs(path_to_csv_1, path_to_csv_2, experiment, axis_name_1, axis
     plt.ylabel(axis_name_2 + '\n' + '%.{0}f\u00b1%.{0}f'.format(roundto) % (auc_2.mean(), auc_2.std()))
 
     idx_pos = np.where(auc_1 > auc_2)[0]
-    pos = plt.scatter(auc_1[idx_pos], auc_2[idx_pos], color='r', marker='o')
+    pos = plt.scatter(auc_1[idx_pos], auc_2[idx_pos], color='b', marker='x')
 
     idx_neg = np.where(auc_1 < auc_2)[0]
-    neg = plt.scatter(auc_1[idx_neg], auc_2[idx_neg], color='b', marker='x')
+    neg = plt.scatter(auc_1[idx_neg], auc_2[idx_neg], color='r', marker='o')
 
     idx_neu = np.where(auc_1 == auc_2)[0]
     neu = plt.scatter(auc_1[idx_neu], auc_2[idx_neu], color='w')
@@ -65,7 +65,7 @@ def compare_two_csvs(path_to_csv_1, path_to_csv_2, experiment, axis_name_1, axis
 
     if not os.path.exists('../Graph'):
         os.mkdir('../Graph')
-    plt.savefig('../Graph/%s.png' % (experiment))
+    plt.savefig('../Graph/%s.png' % (experiment), dpi=300)
 
 
 if __name__ == "__main__":
@@ -84,7 +84,12 @@ if __name__ == "__main__":
     #     '../output/RGCN/20190807-195408-ggnn-attention-32-20-vanilla-attention/rbp-results.csv',
     #     '(sa)gated-rgcn-vs-(a)gated-rgcn', '(sa)gated-rgcn', '(a)gated-rgcn')
 
+    # compare_two_csvs(
+    #     '../output/RNATracker/20190705-141134-set2set-t10-128/rbp-results.csv',
+    #     '../output/RGCN/20190815-211234-32-80-lstm-clipseq-30000-rgcn/rbp-results.csv',
+    #     'RNATracker-vs-MFE-rgcn', 'RNATracker', 'MFE-rgcn')
+
     compare_two_csvs(
         '../output/RNATracker/20190705-141134-set2set-t10-128/rbp-results.csv',
-        '../output/RGCN/20190807-195408-ggnn-attention-32-20-vanilla-attention/rbp-results.csv',
-        'RNATracker-vs-(a)gated-rgcn', 'RNATracker', '(a)gated-rgcn')
+        '../output/RGCN/20190820-171941-boltzmann-sampling-rgcn/rbp-results.csv',
+        'conv-set2set-vs-boltzmann-rgcn', 'conv-set2set', 'boltzmann-rgcn')

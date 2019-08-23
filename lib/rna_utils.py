@@ -4,6 +4,8 @@ import sys
 import RNA
 import gzip
 import pickle
+import random
+import shutil
 import subprocess
 import numpy as np
 import scipy.sparse as sp
@@ -26,34 +28,97 @@ def adj_to_bias(adj, nhood=1):
     return -1e9 * (1.0 - mt)
 
 
-def fold_seq_subopt(seq, fold_algo, sampling=False, sampling_amount=1000):
-    if fold_algo == 'rnafold':
-        # RNAfold is only suitable for short RNA sequences within 100 nucleotides
-        if sampling:
-            # sampling from a boltzmann ensemble
-            cmd = 'echo "%s" | RNAsubopt --stochBT=%d' % (seq, sampling_amount)
-            struct_list = subprocess.check_output(cmd, shell=True). \
-                              decode('utf-8').rstrip().split('\n')[1:]
-        else:
-            struct_list, energy_list = [], []
+'''
+equilibrium probability using RNAplfold
+'''
 
-            def collect_subopt_result(structure, energy, *args):
-                if not structure == None:
-                    struct_list.append(structure)
-                    energy_list.append(energy)
 
-            # Enumerate all structures 100 dacal/mol = 1 kcal/mol around
-            # default deltaEnergy is the MFE
-            RNA.fold_compound(seq).subopt_cb(100, collect_subopt_result, None)
+def fold_seq_rnaplfold(seq, w, l, cutoff, no_lonely_bps):
+    pwd = os.getcwd()
+    np.random.seed(random.seed())
+    name = str(np.random.rand())
+    if 'SLURM_TMPDIR' in os.environ:
+        name = os.path.join(os.environ['SLURM_TMPDIR'], name)
+    os.makedirs(name)
+    os.chdir(name)
 
-            # sort
-            struct_list = list(np.array(struct_list)[np.argsort(energy_list)])
+    # Call RNAplfold on command line.
+    no_lonely_bps_str = ""
+    if no_lonely_bps:
+        no_lonely_bps_str = "--noLP"
+    cmd = 'echo %s | RNAplfold -W %d -L %d -c %.4f %s' % (seq, w, l, cutoff, no_lonely_bps_str)
+    ret = subprocess.call(cmd, shell=True)
+
+    # assemble adjacency matrix
+    row_col, link, prob = [], [], []
+    length = len(seq)
+    for i in range(length):
+        if i != length - 1:
+            row_col.append((i, i + 1))
+            link.append(1)
+            prob.append(1.)
+        if i != 0:
+            row_col.append((i, i - 1))
+            link.append(2)
+            prob.append(1.)
+    # Extract base pair information.
+    start_flag = False
+    with open('plfold_dp.ps') as f:
+        for line in f:
+            if start_flag:
+                values = line.split()
+                if len(values) == 4:
+                    source_id = int(values[0]) - 1
+                    dest_id = int(values[1]) - 1
+                    avg_prob = float(values[2])
+                    # source_id < dest_id
+                    row_col.append((source_id, dest_id))
+                    link.append(3)
+                    prob.append(avg_prob)
+                    row_col.append((dest_id, source_id))
+                    link.append(4)
+                    prob.append(avg_prob)
+            if 'start of base pair probability data' in line:
+                start_flag = True
+    # delete RNAplfold output file.
+    os.remove('plfold_dp.ps')
+    os.chdir(pwd)
+    shutil.rmtree(name)
+    # placeholder for dot-bracket structure
+    return (sp.csr_matrix((link, (np.array(row_col)[:, 0], np.array(row_col)[:, 1])), shape=(length, length)),
+            sp.csr_matrix((prob, (np.array(row_col)[:, 0], np.array(row_col)[:, 1])), shape=(length, length)),)
+
+
+'''
+Boltzmann sampling using RNAsubopt
+'''
+
+
+def fold_seq_subopt(seq, probabilistic=False, sampling_amount=1000):
+    # RNAfold is only suitable for short RNA sequences within 100 nucleotides
+    if probabilistic:
+        # sampling from a boltzmann ensemble
+        cmd = 'echo "%s" | RNAsubopt --stochBT=%d' % (seq, sampling_amount)
+        struct_list = subprocess.check_output(cmd, shell=True). \
+                          decode('utf-8').rstrip().split('\n')[1:]
     else:
-        raise ValueError('Not supporting other folding algorithms yet')
+        struct_list, energy_list = [], []
+
+        def collect_subopt_result(structure, energy, *args):
+            if not structure == None:
+                struct_list.append(structure)
+                energy_list.append(energy)
+
+        # Enumerate all structures 100 dacal/mol = 1 kcal/mol around
+        # default deltaEnergy is the MFE
+        RNA.fold_compound(seq).subopt_cb(100, collect_subopt_result, None)
+
+        # sort
+        struct_list = list(np.array(struct_list)[np.argsort(energy_list)])
 
     # merging all structures into a single adjacency matrix
     # probability returning two matrices
-    matrix = adj_mat_subopt(struct_list, sampling)
+    matrix = adj_mat_subopt(struct_list, probabilistic)
     # process the structures
     return structural_content(struct_list), matrix
 
@@ -69,7 +134,7 @@ def structural_content(struct_list):
     return content.astype(np.float32) / size
 
 
-def adj_mat_subopt(struct_list, sampling):
+def adj_mat_subopt(struct_list, probabilistic):
     # create sparse matrix
     row_col, data = [], []
     length = len(struct_list[0])
@@ -83,7 +148,7 @@ def adj_mat_subopt(struct_list, sampling):
             row_col.append((i, i - 1))
             data.append(2)
             counts.append(0)
-    if sampling:
+    if probabilistic:
         for struct in struct_list:
             bg = fgb.BulgeGraph.from_dotbracket(struct)
             for i, ele in enumerate(struct):
@@ -130,18 +195,15 @@ def adj_mat_subopt(struct_list, sampling):
 
 
 '''
-special case where only the MFE structure is picked
+MFE structure using RNAfold
 '''
 
 
-def fold_seq(seq, fold_algo):
+def fold_seq_rnafold(seq):
     '''fold sequence using RNAfold'''
-    if fold_algo == 'rnafold':
-        struct = RNA.fold(seq)[0]
-    else:
-        raise ValueError('Not supporting other folding algorithms yet')
+    struct = RNA.fold(seq)[0]
     matrix = adj_mat(struct)
-    return struct, matrix
+    return structural_content([struct]), matrix
 
 
 def adj_mat(struct):
@@ -204,29 +266,29 @@ def load_fasta_format(file):
     return all_id, all_seq
 
 
-def load_dotbracket(filepath, pool=None, fold_algo='rnafold', sampling=False):
-    prefix = '%s_%s_' % (fold_algo, sampling)
+def load_dotbracket(filepath, pool=None, fold_algo='rnafold', probabilistic=False):
+    prefix = '%s_%s_' % (fold_algo, probabilistic)
     full_path = os.path.join(os.path.dirname(filepath), '{}structures.npy'.format(prefix))
     if not os.path.exists(full_path):
         print(full_path, 'is missing. Begin folding from scratch.')
-        fold_rna_from_file(filepath, pool, fold_algo, sampling)
+        fold_rna_from_file(filepath, pool, fold_algo, probabilistic)
     # load secondary structures
     all_struct = np.load(
         os.path.join(os.path.dirname(filepath), '{}structures.npy'.format(prefix)))
     return all_struct
 
 
-def load_mat(filepath, pool=None, fold_algo='rnafold', sampling=False):
-    prefix = '%s_%s_' % (fold_algo, sampling)
-    if not os.path.exists(os.path.join(os.path.dirname(filepath), '{}rel_mat.obj'.format(prefix))) or sampling and \
+def load_mat(filepath, pool=None, fold_algo='rnafold', probabilistic=False):
+    prefix = '%s_%s_' % (fold_algo, probabilistic)
+    if not os.path.exists(os.path.join(os.path.dirname(filepath), '{}rel_mat.obj'.format(prefix))) or probabilistic and \
             not os.path.exists(os.path.join(os.path.dirname(filepath), '{}prob_mat.obj'.format(prefix))):
         print('adj mat or prob mat is missing. Begin folding from scratch.')
-        fold_rna_from_file(filepath, pool, fold_algo, sampling)
+        fold_rna_from_file(filepath, pool, fold_algo, probabilistic)
 
     sp_rel_matrix = pickle.load(open(os.path.join(os.path.dirname(filepath), '{}rel_mat.obj'.format(prefix)), 'rb'))
     adjacency_matrix = np.stack([mat.toarray() for mat in sp_rel_matrix], axis=0)
 
-    if sampling:
+    if probabilistic:
         sp_prob_matrix = pickle.load(
             open(os.path.join(os.path.dirname(filepath), '{}prob_mat.obj'.format(prefix)), 'rb'))
         probility_matrix = np.stack([mat.toarray() for mat in sp_prob_matrix], axis=0)
@@ -247,41 +309,70 @@ def load_seq(filepath):
     return all_id, all_seq
 
 
-def fold_rna_from_file(filepath, p=None, fold_algo='rnafold', sampling=False):
+def fold_rna_from_file(filepath, p=None, fold_algo='rnafold', probabilistic=False):
+    assert (fold_algo in ['rnafold', 'rnasubopt', 'rnaplfold'])
+    if fold_algo == 'rnafold':
+        assert (probabilistic is False)
+    if fold_algo == 'rnaplfold':
+        assert (probabilistic is True)
     print('Parsing', filepath)
     _, all_seq = load_seq(filepath)
 
     # compatible with already computed structures with RNAfold
-    prefix = '%s_%s_' % (fold_algo, sampling)
+    prefix = '%s_%s_' % (fold_algo, probabilistic)
 
     if p is None:
         pool = Pool(int(os.cpu_count() * 2 / 3))
     else:
         pool = p
 
-    fold_func = partial(fold_seq_subopt, fold_algo=fold_algo, sampling=sampling)
-    res = list(pool.imap(fold_func, all_seq))
-
-    sp_rel_matrix = []
-    sp_prob_matrix = []
-    structural_content = []
-    for struct, matrix in res:
-        structural_content.append(struct)
-        if sampling:
-            rel_mat, prob_mat = matrix
+    if fold_algo == 'rnafold':
+        fold_func = fold_seq_rnafold
+        res = list(pool.imap(fold_func, all_seq))
+        sp_rel_matrix = []
+        structural_content = []
+        for struct, matrix in res:
+            structural_content.append(struct)
+            sp_rel_matrix.append(matrix)
+        np.save(os.path.join(os.path.dirname(filepath), '{}structures.npy'.format(prefix)),
+                np.stack(structural_content, axis=0))  # [size, length, 3]
+        pickle.dump(sp_rel_matrix,
+                    open(os.path.join(os.path.dirname(filepath), '{}rel_mat.obj'.format(prefix)), 'wb'))
+    elif fold_algo == 'rnasubopt':
+        fold_func = partial(fold_seq_subopt, fold_algo=fold_algo, probabilistic=probabilistic)
+        res = list(pool.imap(fold_func, all_seq))
+        sp_rel_matrix = []
+        sp_prob_matrix = []
+        structural_content = []
+        for struct, matrix in res:
+            structural_content.append(struct)
+            if probabilistic:
+                rel_mat, prob_mat = matrix
+                sp_prob_matrix.append(prob_mat)
+            else:
+                rel_mat = matrix
+            sp_rel_matrix.append(rel_mat)
+        np.save(os.path.join(os.path.dirname(filepath), '{}structures.npy'.format(prefix)),
+                np.stack(structural_content, axis=0))  # [size, length, 3]
+        pickle.dump(sp_rel_matrix,
+                    open(os.path.join(os.path.dirname(filepath), '{}rel_mat.obj'.format(prefix)), 'wb'))
+        if probabilistic:
+            pickle.dump(sp_prob_matrix,
+                        open(os.path.join(os.path.dirname(filepath), '{}prob_mat.obj'.format(prefix)), 'wb'))
+    elif fold_algo == 'rnaplfold':
+        fold_func = partial(fold_seq_rnaplfold, w=101, l=101, cutoff=1e-4, no_lonely_bps=True)
+        res = list(pool.imap(fold_func, all_seq))
+        sp_rel_matrix = []
+        sp_prob_matrix = []
+        for rel_mat, prob_mat in res:
+            sp_rel_matrix.append(rel_mat)
             sp_prob_matrix.append(prob_mat)
-        else:
-            rel_mat = matrix
-        sp_rel_matrix.append(rel_mat)
-
-    np.save(os.path.join(os.path.dirname(filepath), '{}structures.npy'.format(prefix)),
-            np.stack(structural_content, axis=0))  # [size, length, 3]
-
-    pickle.dump(sp_rel_matrix,
-                open(os.path.join(os.path.dirname(filepath), '{}rel_mat.obj'.format(prefix)), 'wb'))
-    if sampling:
+        pickle.dump(sp_rel_matrix,
+                    open(os.path.join(os.path.dirname(filepath), '{}rel_mat.obj'.format(prefix)), 'wb'))
         pickle.dump(sp_prob_matrix,
                     open(os.path.join(os.path.dirname(filepath), '{}prob_mat.obj'.format(prefix)), 'wb'))
+    else:
+        raise ValueError('Supported folding algorithms are ' + ', '.join(['rnafold', 'rnasubopt', 'rnaplfold']))
 
     if p is None:
         pool.close()
@@ -462,33 +553,38 @@ def generate_element_dataset(n, length, element_symbol, p=None, return_label=Tru
 if __name__ == "__main__":
     np.set_printoptions(threshold=np.inf, edgeitems=30, linewidth=100000, )
 
-    with open('boltzmann-sampling-acc.txt', 'w') as file:
-        for amount in [5, 10, 100, 1000, 5000, 10000]:
-            rel_diff, prob_diff = [], []
-            for replcate in range(100):
-                _, res = fold_seq_subopt(
-                    'TGTGAAGCGCGGCTAGCTGCCGGGGTTCGAGGTGGGTCCCAGGGTTAAAATCCCTTGTTGTCTTACTGGTGGCAGCAAGCTAGGACTATACTCCTCGGTCG',
-                    'rnafold', True, amount)
-                _, new_res = fold_seq_subopt(
-                    'TGTGAAGCGCGGCTAGCTGCCGGGGTTCGAGGTGGGTCCCAGGGTTAAAATCCCTTGTTGTCTTACTGGTGGCAGCAAGCTAGGACTATACTCCTCGGTCG',
-                    'rnafold', True, amount)
+    res = fold_seq_rnaplfold(
+        'TGTGAAGCGCGGCTAGCTGCCGGGGTTCGAGGTGGGTCCCAGGGTTAAAATCCCTTGTTGTCTTACTGGTGGCAGCAAGCTAGGACTATACTCCTCGGTCG',
+        101, 101, 0.0001, True)
+    print(res[0].todense())
+    print(res[1].todense())
 
-                diff = (res[0].todense() != new_res[0].todense()).astype(np.int32)
-                rel_diff.append(np.sum(diff))
-
-                diff = np.abs(res[1].todense() - new_res[1].todense())
-                prob_diff.append(np.mean(np.max(diff, axis=-1)))
-            file.writelines('sampling amount %d, relation difference: %.4f\u00b1%.4f, probability difference: %.4f\u00b1%.4f' %
-                  (amount, np.mean(rel_diff), np.std(rel_diff), np.mean(prob_diff), np.std(prob_diff)))
-            print('sampling amount %d, relation difference: %.4f\u00b1%.4f, probability difference: %.4f\u00b1%.4f' %
-                  (amount, np.mean(rel_diff), np.std(rel_diff), np.mean(prob_diff), np.std(prob_diff)))
-
+    # with open('boltzmann-sampling-acc.txt', 'w') as file:
+    #     for amount in [5, 10, 100, 1000, 5000, 10000]:
+    #         rel_diff, prob_diff = [], []
+    #         for replcate in range(100):
+    #             _, res = fold_seq_subopt(
+    #                 'TGTGAAGCGCGGCTAGCTGCCGGGGTTCGAGGTGGGTCCCAGGGTTAAAATCCCTTGTTGTCTTACTGGTGGCAGCAAGCTAGGACTATACTCCTCGGTCG',
+    #                 'rnafold', True, amount)
+    #             _, new_res = fold_seq_subopt(
+    #                 'TGTGAAGCGCGGCTAGCTGCCGGGGTTCGAGGTGGGTCCCAGGGTTAAAATCCCTTGTTGTCTTACTGGTGGCAGCAAGCTAGGACTATACTCCTCGGTCG',
+    #                 'rnafold', True, amount)
+    #
+    #             diff = (res[0].todense() != new_res[0].todense()).astype(np.int32)
+    #             rel_diff.append(np.sum(diff))
+    #
+    #             diff = np.abs(res[1].todense() - new_res[1].todense())
+    #             prob_diff.append(np.mean(np.max(diff, axis=-1)))
+    #         file.writelines('sampling amount %d, relation difference: %.4f\u00b1%.4f, probability difference: %.4f\u00b1%.4f' %
+    #               (amount, np.mean(rel_diff), np.std(rel_diff), np.mean(prob_diff), np.std(prob_diff)))
+    #         print('sampling amount %d, relation difference: %.4f\u00b1%.4f, probability difference: %.4f\u00b1%.4f' %
+    #               (amount, np.mean(rel_diff), np.std(rel_diff), np.mean(prob_diff), np.std(prob_diff)))
 
     # annotation for the multiloop elements
     # all_seqs, adjacency_matrix, all_labels, _ = generate_element_dataset(80000, 101, 'i', return_label=False)
     # print(all_labels.shape)
     # print(np.where(np.count_nonzero(all_labels, axis=-1) > 0)[0].__len__())
-
+    #
     # all_seqs, adjacency_matrix, all_labels, _ = generate_hairpin_dataset(80000, 101, 'm', return_label=False)
     # print(all_labels.shape)
     # print(np.where(np.count_nonzero(all_labels, axis=-1) > 0)[0].__len__())

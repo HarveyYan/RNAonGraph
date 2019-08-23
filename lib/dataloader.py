@@ -29,14 +29,14 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
     needs to be computed at the data loading stage
     '''
     if p is None:
-        pool = Pool(int(os.cpu_count() * 3 / 3))
+        pool = Pool(int(os.cpu_count() * 2 / 3))
     else:
         pool = p
 
     clip_data = []
 
     fold_algo = kwargs.get('fold_algo', 'rnafold')
-    sampling = kwargs.get('sampling', False)
+    probabilistic = kwargs.get('probabilistic', False)
     load_mat = kwargs.get('load_mat', True)
     load_dotbracket = kwargs.get('load_dotbracket', False)
     augment_features = kwargs.get('augment_features', False)
@@ -49,8 +49,8 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
         permute = np.random.permutation(len(all_id))
 
         if load_mat:
-            matrix = lib.rna_utils.load_mat(filepath, pool, fold_algo, sampling)
-            if sampling:
+            matrix = lib.rna_utils.load_mat(filepath, pool, fold_algo, probabilistic)
+            if probabilistic:
                 adjacency_matrix, probability_matrix = matrix
                 dataset['train_prob_mat'] = probability_matrix[permute]
             else:
@@ -60,15 +60,15 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
         dataset['train_label'] = np.array([int(id.split(' ')[-1].split(':')[-1]) for id in all_id])[permute]
         if augment_features:
             # additional features: [size, length, features_dim]
-            dataset['train_features'] = lib.rna_utils.augment_features(path_template.format(rbp, 'training_sample_0', ''))[permute]
-
+            dataset['train_features'] = \
+            lib.rna_utils.augment_features(path_template.format(rbp, 'training_sample_0', ''))[permute]
 
         if load_dotbracket:
             # # # dot bracket structure features
             # # VOCAB_STRUCT = ['.', '(', ')']
             # # VOCAB_STRUCT_VEC = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]]).astype(np.float32)
             # [size, length, 3]
-            dataset['train_struct'] = lib.rna_utils.load_dotbracket(filepath, pool, fold_algo, sampling)[permute]
+            dataset['train_struct'] = lib.rna_utils.load_dotbracket(filepath, pool, fold_algo, probabilistic)[permute]
 
         use_embedding = kwargs.get('use_embedding', False)
         kmer_len = kwargs.get('kmer_len', 3)
@@ -95,8 +95,8 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
         filepath = path_template.format(rbp, 'test_sample_0', 'sequences.fa.gz')
         all_id, all_seq = lib.rna_utils.load_seq(filepath)
         if load_mat:
-            matrix = lib.rna_utils.load_mat(filepath, pool, fold_algo, sampling)
-            if sampling:
+            matrix = lib.rna_utils.load_mat(filepath, pool, fold_algo, probabilistic)
+            if probabilistic:
                 adjacency_matrix, probability_matrix = matrix
                 dataset['test_prob_mat'] = probability_matrix
             else:
@@ -109,7 +109,7 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
             dataset['test_features'] = lib.rna_utils.augment_features(path_template.format(rbp, 'test_sample_0', ''))
 
         if load_dotbracket:
-            dataset['test_struct'] = lib.rna_utils.load_dotbracket(filepath, pool, fold_algo, sampling)
+            dataset['test_struct'] = lib.rna_utils.load_dotbracket(filepath, pool, fold_algo, probabilistic)
 
         if use_embedding:
             kmers = get_kmers(all_seq, kmer_len)
@@ -205,10 +205,9 @@ def load_toy_data(load_hairpin, return_label, p=None, element_symbol='m'):
 
 
 if __name__ == "__main__":
-    pool = Pool(1)
-    from functools import partial
-    list(pool.map(partial(load_clip_seq, sampling=True), [[rbp] for rbp in all_rbps]))
-    # dataset = load_clip_seq(use_embedding=False, sampling=False)
+    res = load_clip_seq(all_rbps, probabilistic=True, fold_algo='rnaplfold')
+    print(res)
+    # dataset = load_clip_seq(use_embedding=False, probabilistic=False)
     # print(len(np.where(dataset[0]['train_label'] == 1)[0]))
     # dataset = load_toy_data()
     # print(dataset['train_seq'].shape)
