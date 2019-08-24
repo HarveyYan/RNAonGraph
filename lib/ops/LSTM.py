@@ -91,18 +91,14 @@ def self_attention(name, attention_size, inputs, use_conv=False):
 #
 #########################################
 
-def BiLSTMEncoder(name, hidden_units, inputs, length, dropout_rate, is_training_ph):
+def BiLSTMEncoder(name, hidden_units, inputs, length, dropout_rate, is_training_ph, mask_offset=None):
     with tf.variable_scope(name):
-        with tf.device('/cpu:0'):
-            cell_forward = tf.nn.rnn_cell.LSTMCell(hidden_units, name='forward_cell')
-            cell_backward = tf.nn.rnn_cell.LSTMCell(hidden_units, name='backward_cell')
-
         cell_forward = tf.nn.rnn_cell.DropoutWrapper(
-            cell_forward,
+            tf.nn.rnn_cell.LSTMCell(hidden_units, name='forward_cell'),
             output_keep_prob=tf.cond(is_training_ph, lambda: 1 - dropout_rate, lambda: 1.)  # keep prob
         )
         cell_backward = tf.nn.rnn_cell.DropoutWrapper(
-            cell_backward,
+            tf.nn.rnn_cell.LSTMCell(hidden_units, name='backward_cell'),
             output_keep_prob=tf.cond(is_training_ph, lambda: 1 - dropout_rate, lambda: 1.)
         )
 
@@ -138,26 +134,33 @@ def BiLSTMEncoder(name, hidden_units, inputs, length, dropout_rate, is_training_
         encoder_state = tf.nn.rnn_cell.LSTMStateTuple(c=tf.concat([state_forward[0], state_backward[0]], axis=-1),
                                                       h=tf.concat([state_forward[1], state_backward[1]], axis=-1))
 
-        return output, encoder_state
+        if mask_offset is None:
+            return output, encoder_state
+        else:
+            mask = tf.sequence_mask(mask_offset, maxlen=tf.shape(output)[1], dtype=tf.float32)[:, :, None]
+            return output * (1. - mask), encoder_state
 
 
-def set2set_attention(name, encoder_outputs, cell_output):
+def set2set_attention(name, encoder_outputs, cell_output, mask_offset=None):
     '''
     Luong's multiplicative attention
     '''
     with tf.variable_scope(name, reuse=tf.AUTO_REUSE):
         scores = tf.matmul(encoder_outputs, cell_output[:, None, :], transpose_b=True)[:, :, 0]
+        if mask_offset is not None:
+            bias_mat = tf.sequence_mask(mask_offset, maxlen=tf.shape(scores)[1], dtype=tf.float32) * -1e9
+            scores += bias_mat
         attention_weights = tf.nn.softmax(scores, axis=-1)
         context_vector = tf.reduce_sum(encoder_outputs * attention_weights[:, :, None], axis=1)
         return tf.concat([context_vector, cell_output], axis=-1)
 
 
-def set2set_pooling(name, inputs, T, dropout_rate, is_training_ph, lstm_encoder=False):
+def set2set_pooling(name, inputs, T, dropout_rate, is_training_ph, lstm_encoder=False, mask_offset=None):
     with tf.variable_scope(name):
         nb_features = inputs.get_shape().as_list()[-1]
         if lstm_encoder:
             inputs, state = BiLSTMEncoder('BiLSTMEncoder', nb_features, inputs,
-                                          tf.shape(inputs)[1], dropout_rate, is_training_ph)
+                                          tf.shape(inputs)[1], dropout_rate, is_training_ph, mask_offset)
             nb_features = state[0].get_shape().as_list()[-1]
             with tf.device('/cpu:0'):
                 cell = tf.nn.rnn_cell.LSTMCell(nb_features, name='decoder_lstm_cell')
@@ -172,7 +175,7 @@ def set2set_pooling(name, inputs, T, dropout_rate, is_training_ph, lstm_encoder=
 
         def body(i, state, token):
             cell_output, state = cell(token, state)
-            attention_vector = set2set_attention('DecoderATT', inputs, cell_output)
+            attention_vector = set2set_attention('DecoderATT', inputs, cell_output, mask_offset)
             return [tf.add(i, 1), state, attention_vector]
 
         _, state, final_token = tf.while_loop(while_condition, body, [i, state, start_token])

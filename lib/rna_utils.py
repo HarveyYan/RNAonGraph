@@ -286,13 +286,13 @@ def load_mat(filepath, pool=None, fold_algo='rnafold', probabilistic=False):
         fold_rna_from_file(filepath, pool, fold_algo, probabilistic)
 
     sp_rel_matrix = pickle.load(open(os.path.join(os.path.dirname(filepath), '{}rel_mat.obj'.format(prefix)), 'rb'))
-    adjacency_matrix = np.stack([mat.toarray() for mat in sp_rel_matrix], axis=0)
+    adjacency_matrix = np.array([mat.toarray() for mat in sp_rel_matrix])
 
     if probabilistic:
         sp_prob_matrix = pickle.load(
             open(os.path.join(os.path.dirname(filepath), '{}prob_mat.obj'.format(prefix)), 'rb'))
-        probility_matrix = np.stack([mat.toarray() for mat in sp_prob_matrix], axis=0)
-        matrix = (adjacency_matrix, probility_matrix)
+        probability_matrix = np.array([mat.toarray() for mat in sp_prob_matrix])
+        matrix = (adjacency_matrix, probability_matrix)
     else:
         matrix = adjacency_matrix
 
@@ -328,14 +328,15 @@ def fold_rna_from_file(filepath, p=None, fold_algo='rnafold', probabilistic=Fals
 
     if fold_algo == 'rnafold':
         fold_func = fold_seq_rnafold
-        res = list(pool.imap(fold_func, all_seq))
+        from tqdm import tqdm
+        res = list(tqdm(pool.imap(fold_func, all_seq)))
         sp_rel_matrix = []
         structural_content = []
         for struct, matrix in res:
             structural_content.append(struct)
             sp_rel_matrix.append(matrix)
         np.save(os.path.join(os.path.dirname(filepath), '{}structures.npy'.format(prefix)),
-                np.stack(structural_content, axis=0))  # [size, length, 3]
+                np.array(structural_content))  # [size, length, 3]
         pickle.dump(sp_rel_matrix,
                     open(os.path.join(os.path.dirname(filepath), '{}rel_mat.obj'.format(prefix)), 'wb'))
     elif fold_algo == 'rnasubopt':
@@ -353,7 +354,7 @@ def fold_rna_from_file(filepath, p=None, fold_algo='rnafold', probabilistic=Fals
                 rel_mat = matrix
             sp_rel_matrix.append(rel_mat)
         np.save(os.path.join(os.path.dirname(filepath), '{}structures.npy'.format(prefix)),
-                np.stack(structural_content, axis=0))  # [size, length, 3]
+                np.array(structural_content))  # [size, length, 3]
         pickle.dump(sp_rel_matrix,
                     open(os.path.join(os.path.dirname(filepath), '{}rel_mat.obj'.format(prefix)), 'wb'))
         if probabilistic:

@@ -1,7 +1,5 @@
 import os
 import sys
-import gzip
-import itertools
 import numpy as np
 from gensim.models import Word2Vec
 
@@ -13,7 +11,7 @@ import lib.rna_utils
 from lib.general_utils import Pool
 
 clip_data_path = os.path.join(basedir, 'Data', 'GraphProt_CLIP_sequences')
-all_rbps = [dir for dir in os.listdir(clip_data_path) if os.path.isdir(dir)]
+all_rbps = [dir for dir in os.listdir(clip_data_path) if os.path.isdir(os.path.join(clip_data_path, dir))]
 # rbp, split, label
 path_template = os.path.join(basedir, 'Data', 'GraphProt_CLIP_sequences', '{}', '{}', '{}', 'data.fa')
 
@@ -26,7 +24,7 @@ BOND_TYPE = {
 }
 
 if len(all_rbps) == 0:
-    print('reorganizing grpahprot dataset')
+    print('reorganizing graphprot dataset')
     def __reorganize_dir():
         all_rbps = set([dir.split('.')[0] for dir in os.listdir(clip_data_path)])
         path_template = os.path.join(basedir, 'Data', 'GraphProt_CLIP_sequences', '{}.{}.{}.fa')
@@ -37,7 +35,6 @@ if len(all_rbps) == 0:
                     if not os.path.exists(dir_to):
                         os.makedirs(dir_to)
                     os.rename(path_template.format(rbp, split, label), os.path.join(dir_to, 'data.fa'))
-
 
     __reorganize_dir()
 
@@ -52,31 +49,39 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
     else:
         pool = p
 
+    fold_algo = kwargs.get('fold_algo', 'rnafold')
+    probabilistic = kwargs.get('probabilistic', False)
+    load_mat = kwargs.get('load_mat', True)
+
     clip_data = []
 
     rbp_list = all_rbps if rbp_list is None else rbp_list
     for rbp in rbp_list:
         dataset = {}
 
-        pos_id, pos_seq, pos_adjacency_matrix, pos_struct = lib.rna_utils. \
-            fold_rna_from_file(path_template.format(rbp, 'train', 'positives'), pool)
-
-        neg_id, neg_seq, neg_adjacency_matrix, neg_struct = lib.rna_utils. \
-            fold_rna_from_file(path_template.format(rbp, 'train', 'positives'), pool)
-
+        pos_id, pos_seq = lib.rna_utils.load_seq(path_template.format(rbp, 'train', 'positives'))
+        neg_id, neg_seq = lib.rna_utils.load_seq(path_template.format(rbp, 'train', 'negatives'))
         all_id = pos_id + neg_id
         all_seq = pos_seq + neg_seq
-        adjacency_matrix = np.concatenate([pos_adjacency_matrix, neg_adjacency_matrix], axis=0)
-        all_struct = pos_struct + neg_struct
-
         permute = np.random.permutation(len(all_id))
-        dataset['train_label'] = np.array([1] * len(pos_id) + [0] * (len(neg_id)))[permute]
-        dataset['train_adj_mat'] = adjacency_matrix[permute]
 
-        # dot bracket structure features
-        VOCAB_STRUCT = ['.', '(', ')']
-        VOCAB_STRUCT_VEC = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]]).astype(np.float32)
-        dataset['train_struct'] = np.array([[VOCAB_STRUCT.index(c) for c in struct] for struct in all_struct])[permute]
+        if load_mat:
+            pos_matrix = lib.rna_utils.load_mat(path_template.format(rbp, 'train', 'positives')
+                                                , pool, fold_algo, probabilistic)
+            neg_matrix = lib.rna_utils.load_mat(path_template.format(rbp, 'train', 'negatives')
+                                                , pool, fold_algo, probabilistic)
+            if probabilistic:
+                pos_adjacency_matrix, pos_probability_matrix = pos_matrix
+                neg_adjacency_matrix, neg_probability_matrix = neg_matrix
+                probability_matrix = np.concatenate([pos_probability_matrix, neg_probability_matrix], axis=0)
+                dataset['train_prob_mat'] = probability_matrix[permute]
+            else:
+                pos_adjacency_matrix = pos_matrix
+                neg_adjacency_matrix = neg_matrix
+            adjacency_matrix = np.concatenate([pos_adjacency_matrix, neg_adjacency_matrix], axis=0)
+            dataset['train_adj_mat'] = adjacency_matrix[permute]
+
+        dataset['train_label'] = np.array([1] * len(pos_id) + [0] * (len(neg_id)))[permute]
 
         all_seq = [seq.upper().replace('U', 'T') for seq in all_seq]
 
@@ -101,21 +106,30 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
             dataset['train_seq'] = np.array([[VOCAB.index(c) for c in seq] for seq in all_seq])[permute]
 
         # load test set
-        pos_id, pos_seq, pos_adjacency_matrix, pos_struct = lib.rna_utils. \
-            fold_rna_from_file(path_template.format(rbp, 'test', 'positives'), pool)
-
-        neg_id, neg_seq, neg_adjacency_matrix, neg_struct = lib.rna_utils. \
-            fold_rna_from_file(path_template.format(rbp, 'test', 'negatives'), pool)
-
+        pos_id, pos_seq = lib.rna_utils.load_seq(path_template.format(rbp, 'ls', 'positives'))
+        neg_id, neg_seq = lib.rna_utils.load_seq(path_template.format(rbp, 'ls', 'negatives'))
         all_id = pos_id + neg_id
         all_seq = pos_seq + neg_seq
-        adjacency_matrix = np.concatenate([pos_adjacency_matrix, neg_adjacency_matrix], axis=0)
-        all_struct = pos_struct + neg_struct
 
-        dataset['test_label'] = np.array([1] * len(pos_id) + [0] * len(neg_id))
-        dataset['test_adj_mat'] = adjacency_matrix
+        if load_mat:
+            pos_matrix = lib.rna_utils.load_mat(path_template.format(rbp, 'ls', 'positives')
+                                                , pool, fold_algo, probabilistic)
+            neg_matrix = lib.rna_utils.load_mat(path_template.format(rbp, 'ls', 'negatives')
+                                                , pool, fold_algo, probabilistic)
+            if probabilistic:
+                pos_adjacency_matrix, pos_probability_matrix = pos_matrix
+                neg_adjacency_matrix, neg_probability_matrix = neg_matrix
+                probability_matrix = np.concatenate([pos_probability_matrix, neg_probability_matrix], axis=0)
+                dataset['test_prob_mat'] = probability_matrix
+            else:
+                pos_adjacency_matrix = pos_matrix
+                neg_adjacency_matrix = neg_matrix
+            adjacency_matrix = np.concatenate([pos_adjacency_matrix, neg_adjacency_matrix], axis=0)
+            dataset['test_adj_mat'] = adjacency_matrix
 
-        dataset['test_struct'] = np.array([['.()'.index(c) for c in struct] for struct in all_struct])
+        dataset['test_label'] = np.array([1] * len(pos_id) + [0] * (len(neg_id)))
+
+        all_seq = [seq.upper().replace('U', 'T') for seq in all_seq]
 
         if use_embedding:
             kmers = get_kmers(all_seq, kmer_len)
@@ -123,39 +137,10 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
         else:
             dataset['test_seq'] = np.array([[VOCAB.index(c) if c in VOCAB else 0 for c in seq] for seq in all_seq])
 
-        if kwargs.get('merge_seq_and_struct', False):
-            mode = kwargs.get('merge_mode', 'product')
-            TOTAL_VOCAB = []
-            TOTAL_VOCAB_VEC = []
-            for se, st in itertools.product(VOCAB[1:], VOCAB_STRUCT):
-                TOTAL_VOCAB.append(se + st)
-                vec_seq = VOCAB_VEC[VOCAB.index(se)]
-                vec_struct = VOCAB_STRUCT_VEC[VOCAB_STRUCT.index(st)]
-                if mode == 'concatenation':
-                    TOTAL_VOCAB_VEC.append(np.concatenate([vec_seq, vec_struct]))  # dim = 5 + 3
-                elif mode == 'product':
-                    vec = [0] * (len(VOCAB[1:]) * len(VOCAB_STRUCT))  # dim = 5 * 3
-                    vec[(VOCAB.index(se) - 1) * len(VOCAB_STRUCT) + VOCAB_STRUCT.index(st)] = 1
-                    TOTAL_VOCAB_VEC.append(vec)
-                else:
-                    raise ValueError('Unknown merge mode')
-            TOTAL_VOCAB_VEC = np.array(TOTAL_VOCAB_VEC).astype(np.float32)
+        # only using nucleotide information
+        dataset['VOCAB'] = VOCAB
+        dataset['VOCAB_VEC'] = VOCAB_VEC
 
-            for prefix in ['train', 'test']:
-                all_seq = []
-                for seq, struct in zip(dataset['%s_seq' % (prefix)], dataset['%s_struct' % (prefix)]):
-                    merged_seq = []
-                    for se_idx, st_idx in zip(seq, struct):
-                        merged_seq.append(TOTAL_VOCAB.index(VOCAB[se_idx] + VOCAB_STRUCT[st_idx]))
-                    all_seq.append(merged_seq)
-                dataset['%s_seq' % (prefix)] = np.array(all_seq)
-
-            dataset['VOCAB'] = TOTAL_VOCAB
-            dataset['VOCAB_VEC'] = TOTAL_VOCAB_VEC
-        else:
-            # only using nucleotide information then
-            dataset['VOCAB'] = VOCAB
-            dataset['VOCAB_VEC'] = VOCAB_VEC
         clip_data.append(dataset)
 
     if p is None:
@@ -190,4 +175,6 @@ def pretrain_word2vec(seqs, kmer_len, window, embedding_size, save_path):
 
 
 if __name__ == "__main__":
-    dataset = load_clip_seq(use_embedding=False)
+    dataset = load_clip_seq(use_embedding=False, rbp_list=['ALKBH5_Baltz2012'], fold_algo='rnafold', probabilistic=False)[0]
+    print(dataset['train_adj_mat'].shape)
+    print(dataset['train_adj_mat'][0].shape)
