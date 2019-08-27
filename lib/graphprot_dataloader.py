@@ -1,7 +1,6 @@
 import os
 import sys
 import numpy as np
-import tensorflow as tf
 import scipy.sparse as sp
 import multiprocessing as mp
 from gensim.models import Word2Vec
@@ -89,6 +88,24 @@ def split_matrices_by_relation(sparse_matrices, pool):
     '''
     from tqdm import tqdm
     ret = np.array(list(tqdm(pool.imap(split_matrix_by_relation, sparse_matrices))))
+    return ret[:,0], ret[:,1], ret[:, 2]
+
+
+def split_matrix_triu(mat):
+    '''
+    split the sparse adjacency matrix by different relations
+    '''
+    length = mat.shape[0]
+    mat = sp.triu(mat, 2)
+    return mat.data, np.stack([mat.row, mat.col], axis=1), length
+
+
+def split_matrices_triu(sparse_matrices, pool):
+    '''
+    merge sparse submatrices, and split into 4 matrices by relation
+    '''
+    from tqdm import tqdm
+    ret = np.array(list(tqdm(pool.imap(split_matrix_triu, sparse_matrices))))
     return ret[:,0], ret[:,1], ret[:, 2]
 
 
@@ -214,9 +231,8 @@ if __name__ == "__main__":
     data = np.array([1, 1, 2, 2, 3, 4])
     test_mat = csr_matrix((data, (row, col)), shape=(3, 3))
     print(test_mat.toarray())
-    import multiprocessing as mp
-    all_data, all_row_col, segment_size = split_matrices_by_relation([test_mat]*2, mp.Pool(2))
-    print(all_data)
-    print(all_row_col)
-    print(segment_size)
+    all_data, all_row_col, segment_size = split_matrices_triu([test_mat]*2, mp.Pool(2))
+    print(all_data.shape)
+    print(all_row_col[0])
+    print(segment_size.shape)
 

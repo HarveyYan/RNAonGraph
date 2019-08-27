@@ -19,6 +19,8 @@ tf.app.flags.DEFINE_list('gpu_device', '0,1', '')
 tf.app.flags.DEFINE_bool('use_clr', True, '')
 tf.app.flags.DEFINE_bool('use_momentum', False, '')
 tf.app.flags.DEFINE_integer('parallel_processes', 1, '')
+tf.app.flags.DEFINE_integer('batch_size', 200, '')
+tf.app.flags.DEFINE_bool('share_device', False, '')
 # some experiment settings
 tf.app.flags.DEFINE_bool('use_attention', False, '')
 tf.app.flags.DEFINE_bool('expr_simplified_attention', False, '')
@@ -40,7 +42,7 @@ if FLAGS.fold_algo == 'rnaplfold':
 
 lib.graphprot_dataloader._initialize()
 TRAIN_RBP_ID = FLAGS.train_rbp_id
-BATCH_SIZE = 200
+BATCH_SIZE = FLAGS.batch_size
 EPOCHS = FLAGS.epochs  # How many iterations to train for
 DEVICES = ['/gpu:%s' % (device) for device in FLAGS.gpu_device] if len(FLAGS.gpu_device) > 0 else ['/cpu:0']
 RBP_LIST = lib.graphprot_dataloader.all_rbps
@@ -48,6 +50,10 @@ MAX_LEN = 101
 
 TRAIN_RBP_ID = FLAGS.train_rbp_id
 assert (TRAIN_RBP_ID in RBP_LIST)
+
+if FLAGS.share_device:
+    DEVICES *= 2
+    print('Warning, sharing devices. Make sure you have enough video card memory!')
 
 if FLAGS.parallel_processes > len(DEVICES):
     print('Warning: parallel_processes %d is larger than available devices %d. Adjusting to %d.' % \
@@ -89,7 +95,11 @@ def Logger(q):
             else:
                 print(process_id, 'not found')
                 all_registered_devices = list(registered_gpus.values())
-                free_devices = list(set(DEVICES).difference(set(all_registered_devices)))
+                from collections import Counter
+                c1 = Counter(DEVICES)
+                c2 = Counter(all_registered_devices)
+                free_devices = list((c1 - c2).elements())
+                # free_devices = list(set(DEVICES).difference(set(all_registered_devices)))
                 if len(free_devices) > 0:
                     print('free device', free_devices[0])
                     q.put('master_%d_'%(process_id)+free_devices[0])
@@ -108,7 +118,15 @@ def Logger(q):
 
 
 def run_one_rbp(idx, q):
+    fold_output = os.path.join(output_dir, 'fold%d' % (idx))
+    os.makedirs(fold_output)
+
+    outfile = open(os.path.join(fold_output, str(os.getpid())) + ".out", "w")
+    sys.stdout = outfile
+    sys.stderr = outfile
+
     import time
+    # todo: replace _identity with pid and let logger check if pid still alive
     process_id = mp.current_process()._identity[0]
     print('sending process id', mp.current_process()._identity[0])
     q.put('worker_%d'%(process_id))
@@ -122,13 +140,6 @@ def run_one_rbp(idx, q):
                 break
         q.put(msg)
         time.sleep(np.random.rand()*2)
-
-    fold_output = os.path.join(output_dir, 'fold%d' % (idx))
-    os.makedirs(fold_output)
-
-    outfile = open(os.path.join(fold_output, str(os.getpid())) + ".out", "w")
-    sys.stdout = outfile
-    sys.stderr = outfile
 
     print('training fold', idx)
     train_idx, test_idx = dataset['splits'][idx]

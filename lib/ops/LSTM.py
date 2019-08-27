@@ -111,43 +111,67 @@ def BiLSTMEncoder(name, hidden_units, inputs, length, dropout_rate, is_training_
             output_keep_prob=tf.cond(is_training_ph, lambda: 1 - dropout_rate, lambda: 1.)
         )
 
-        state_forward = cell_forward.zero_state(tf.shape(inputs)[0], tf.float32)
-        state_backward = cell_backward.zero_state(tf.shape(inputs)[0], tf.float32)
+        batch_size = tf.shape(inputs)[0]
+        row_idx = tf.range(batch_size)
+        cell_state_forward = cell_forward.zero_state(batch_size, tf.float32)
+        cell_state_backward = cell_backward.zero_state(batch_size, tf.float32)
 
         input_forward = inputs
         input_backward = tf.reverse(inputs, [1])
 
-        output_forward = tf.TensorArray(tf.float32, size=length, infer_shape=True, dynamic_size=True)
-        output_backward = tf.TensorArray(tf.float32, size=length, infer_shape=True, dynamic_size=True)
+        output_forward_array = tf.TensorArray(tf.float32, size=length, infer_shape=True, dynamic_size=True)
+        output_backward_array = tf.TensorArray(tf.float32, size=length, infer_shape=True, dynamic_size=True)
 
         # unroll
         i = tf.constant(0)
         while_condition = lambda i, _1, _2, _3, _4: tf.less(i, length)
 
-        def body(i, output_forward, output_backward, state_forward, state_backward):
-            cell_output_forward, state_forward = cell_forward(input_forward[:, i, :], state_forward)
-            output_forward = output_forward.write(i, cell_output_forward)
-            cell_output_backward, state_backward = cell_backward(input_backward[:, i, :], state_backward)
-            output_backward = output_backward.write(i, cell_output_backward)
-            return [tf.add(i, 1), output_forward, output_backward, state_forward, state_backward]
+        def body(i, output_forward_array, output_backward_array, cell_state_forward, cell_state_backward):
+            _, new_cell_state_forward = cell_forward(input_forward[:, i, :], cell_state_forward)
+            _, new_cell_state_backward = cell_backward(input_backward[:, i, :], cell_state_backward)
+            if mask_offset is not None:
+                forward_idx = tf.stack([row_idx, tf.cast(mask_offset > i, tf.int32)], axis=1)
+                cf_memory = tf.gather_nd(
+                    tf.stack([new_cell_state_forward[0], cell_state_forward[0]], axis=1),
+                    forward_idx)
+                cf_output = tf.gather_nd(
+                    tf.stack([new_cell_state_forward[1], cell_state_forward[1]], axis=1),
+                    forward_idx)
+                cell_state_forward = tf.nn.rnn_cell.LSTMStateTuple(cf_memory, cf_output)
 
-        _, output_forward, output_backward, state_forward, state_backward = tf.while_loop(while_condition, body,
-                                                                                          [i, output_forward,
-                                                                                           output_backward,
-                                                                                           state_forward,
-                                                                                           state_backward])
-        output_forward = tf.transpose(output_forward.stack(), [1, 0, 2])
-        output_backward = tf.reverse(tf.transpose(output_backward.stack(), [1, 0, 2]), [1])
+                backward_idx = tf.stack([row_idx, tf.cast(length - i <= mask_offset, tf.int32)], axis=1)
+                cb_memory = tf.gather_nd(
+                    tf.stack([new_cell_state_backward[0], cell_state_backward[0]], axis=1),
+                    backward_idx)
+                cb_output = tf.gather_nd(
+                    tf.stack([new_cell_state_backward[1], cell_state_backward[1]], axis=1),
+                    backward_idx)
+                cell_state_backward = tf.nn.rnn_cell.LSTMStateTuple(cb_memory, cb_output)
+            else:
+                cell_state_forward = new_cell_state_forward
+                cell_state_backward = new_cell_state_backward
+
+            output_forward_array = output_forward_array.write(i, cell_state_forward[1])
+            output_backward_array = output_backward_array.write(i, cell_state_backward[1])
+
+            return [tf.add(i, 1), output_forward_array, output_backward_array, cell_state_forward, cell_state_backward]
+
+        _, output_forward_array, output_backward_array, \
+        cell_state_forward, cell_state_backward = tf.while_loop(while_condition, body,
+                                                                [i, output_forward_array, output_backward_array,
+                                                                 cell_state_forward, cell_state_backward])
+        output_forward = tf.transpose(output_forward_array.stack(), [1, 0, 2])
+        output_backward = tf.reverse(tf.transpose(output_backward_array.stack(), [1, 0, 2]), [1])
         output = tf.concat([output_forward, output_backward], axis=2)
 
-        encoder_state = tf.nn.rnn_cell.LSTMStateTuple(c=tf.concat([state_forward[0], state_backward[0]], axis=-1),
-                                                      h=tf.concat([state_forward[1], state_backward[1]], axis=-1))
+        encoder_state = tf.nn.rnn_cell.LSTMStateTuple(
+            c=tf.concat([cell_state_forward[0], cell_state_backward[0]], axis=-1),
+            h=tf.concat([cell_state_forward[1], cell_state_backward[1]], axis=-1))
 
-        if mask_offset is None:
-            return output, encoder_state
-        else:
-            mask = tf.sequence_mask(mask_offset, maxlen=tf.shape(output)[1], dtype=tf.float32)[:, :, None]
-            return output * (1. - mask), encoder_state
+        if mask_offset is not None:
+            output *= (1. - tf.sequence_mask(mask_offset, maxlen=tf.shape(output)[1], dtype=tf.float32)[:, :, None])
+
+        return output, encoder_state
 
 
 def set2set_attention(name, encoder_outputs, cell_output, mask_offset=None):
@@ -196,3 +220,36 @@ def set2set_pooling(name, inputs, T, dropout_rate, is_training_ph, lstm_encoder=
 
         _, state, final_token = tf.while_loop(while_condition, body, [i, state, start_token])
         return final_token
+
+
+if __name__ == "__main__":
+    with tf.variable_scope('', reuse=tf.AUTO_REUSE):
+        import numpy as np
+
+        np.set_printoptions(threshold=np.inf, edgeitems=30, linewidth=100000, precision=7)
+        inputs = (np.random.rand(20, 10, 64) * 10).astype(np.float32)
+        inputs = tf.constant(inputs)
+        mask_offset = (np.random.rand(20) * 5).astype(np.int32)
+        mask_offset[0] = 3
+        mask_offset = tf.constant(mask_offset)
+
+        output, encoder_state = BiLSTMEncoder('test', 64, inputs, 10, 0.2, tf.constant(False), mask_offset)
+        sess = tf.Session()
+        sess.run(tf.global_variables_initializer())
+        # print(sess.run(inputs)[0][:10])
+
+        print(sess.run(mask_offset)[0])
+
+        # print(tf.get_default_graph().get_operations())
+        # print(sess.run(tf.get_default_graph().get_tensor_by_name('test/forward_cell/kernel:0')))
+
+        # print(sess.run(output[0]))
+        print(sess.run(encoder_state[1][0]))
+
+        new_input = inputs[0][mask_offset[0]:]
+        # print(sess.run(new_input).shape)
+        new_output, new_encoder_state = BiLSTMEncoder('test', 64, new_input[None, :, :], 10 - mask_offset[0], 0.2,
+                                                      tf.constant(False), [0])
+
+        # print(sess.run(new_output[0]))
+        print(sess.run(new_encoder_state[1][0]))

@@ -245,7 +245,7 @@ class SparseMaskRGCN:
         merge sparse submatrices
         '''
         all_tensors = []
-        for i in range(4):
+        for i in [0, 2]:
             all_data, all_row_col = [], []
             size = 0
             for _data, _row_col, _segment in zip(data, row_col, segments):
@@ -259,6 +259,15 @@ class SparseMaskRGCN:
                     (size, size)
                 )
             )
+            # trick, transpose
+            all_tensors.append(
+                tf.compat.v1.SparseTensorValue(
+                    np.concatenate(all_row_col)[:, [1,0]],
+                    np.concatenate(all_data),
+                    (size, size)
+                )
+            )
+
         # return 4 matrices, one for each relation, max_len and segment_length
         return all_tensors
 
