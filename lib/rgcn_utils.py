@@ -1,6 +1,5 @@
 import tensorflow as tf
 from lib.ops.Linear import linear
-from lib.ops.LSTM import set2set_pooling, naive_attention
 
 
 def graph_convolution_layers(name, inputs, units, reuse=True):
@@ -23,7 +22,7 @@ def graph_convolution_layers(name, inputs, units, reuse=True):
         nb_bonds = adj.get_shape().as_list()[1]
 
         # [batch_size, nb_bonds, length, units]
-        output = tf.stack([linear('lt_bond_%d' % (i + 1), input_dim, units, annotations)
+        output = tf.stack([linear('lt_bond_%d' % (i + 1), input_dim, units, annotations, biases=False)
                            for i in range(nb_bonds)], axis=1)
 
         '''normalization doesn't really help ==> most nucleotides only have two incident edges'''
@@ -38,7 +37,7 @@ def graph_convolution_layers(name, inputs, units, reuse=True):
 
         output = tf.reduce_mean(tf.matmul(adj, output), axis=1)
         # self-connection \approx residual connection
-        output = output + linear('self-connect', input_dim, units, annotations)
+        output = output + linear('self-connect', input_dim, units, annotations, biases=False)
         return output  # messages
 
 
@@ -124,40 +123,22 @@ def att_gcl(name, inputs, units, reuse=True, expr_simplified_att=False):
         return hidden_tensor + linear('OutputMapping', input_dim, units, annotations, biases=False)
 
 
-def relational_gcn(inputs, units, is_training_ph, dropout_rate=0., use_att=False):
-    adj_tensor, hidden_tensor, node_tensor = inputs
-
-    for i, u in enumerate(units):
-        if use_att:
-            hidden_tensor = att_gcl('graph_convolution_%d' % (i + 1),
-                                    (adj_tensor, hidden_tensor, node_tensor), u)
-        else:
-            hidden_tensor = graph_convolution_layers('graph_convolution_%d' % (i + 1),
-                                                     (adj_tensor, hidden_tensor, node_tensor), u)
-        hidden_tensor = normalize('Norm_%d' % (i + 1), hidden_tensor, True, is_training_ph)
-        hidden_tensor = tf.nn.leaky_relu(hidden_tensor)
-        hidden_tensor = tf.layers.dropout(hidden_tensor, dropout_rate, training=is_training_ph)
-        # [batch_size, length, u]
-
-    # node_tensor = lib.ops.Conv1D.conv1d('channel_expanding', 4, units[0], 1, node_tensor)
-    # for i, u in enumerate(units):
-    #     if i == 0:
-    #         hidden_tensor = residual_rgcn_block('rgcn_resblock_optim', units[0], units[0],
-    #                                             (adj_tensor, hidden_tensor, node_tensor),
-    #                                             is_training_ph, True)
-    #     else:
-    #         hidden_tensor = residual_rgcn_block('rgcn_resblock_%d' % (i + 1), units[i-1], u,
-    #                                             (adj_tensor, hidden_tensor, node_tensor),
-    #                                             is_training_ph, use_bn=True)
-
-    # return hidden_tensor
-    with tf.variable_scope('graph_aggregation'):
-        annotations = tf.concat(
-            [hidden_tensor, inputs[1], node_tensor] if inputs[1] is not None else [hidden_tensor, node_tensor],
-            axis=-1
-        )
-        return set2set_pooling('set2set_pooling', hidden_tensor, 10)
-        # return naive_attention('naive_attention', 50, annotations)
+def sparse_graph_convolution_layers(name, inputs, units, reuse=True):
+    with tf.variable_scope(name, reuse=tf.AUTO_REUSE if reuse else False):
+        # adj_tensor: list (size nb_bonds) of [length, length] matrices
+        adj_tensor, hidden_tensor, node_tensor = inputs
+        annotations = hidden_tensor if hidden_tensor is not None else node_tensor
+        input_dim = annotations.get_shape().as_list()[-1]
+        nb_bonds = len(adj_tensor)
+        output = []
+        for i in range(nb_bonds):
+            msg_bond = linear('lt_bond_%d' % (i + 1), input_dim, units,
+                              annotations, biases=False, variables_on_cpu=False)
+            output.append(tf.sparse_tensor_dense_matmul(adj_tensor[i], msg_bond))
+        output = tf.add_n(output) / nb_bonds
+        # self-connection \approx residual connection
+        output = output + linear('self-connect', input_dim, units, annotations, variables_on_cpu=False)
+        return output  # messages
 
 
 def normalize(name, inputs, use_bn, is_training_ph):

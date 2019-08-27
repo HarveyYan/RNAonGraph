@@ -2,7 +2,7 @@ import tensorflow as tf
 import numpy as np
 
 
-def linear(name, input_dim, output_dim, inputs, initialization=None, biases=True):
+def linear(name, input_dim, output_dim, inputs, initialization=None, biases=True, variables_on_cpu=True):
     with tf.variable_scope(name):
 
         def uniform_init(stdev):
@@ -54,7 +54,10 @@ def linear(name, input_dim, output_dim, inputs, initialization=None, biases=True
         else:
             raise Exception('Unknown initialization!')
 
-        with tf.device('/cpu:0'):
+        if variables_on_cpu:
+            with tf.device('/cpu:0'):
+                weight = tf.get_variable('W', shape=(input_dim, output_dim), initializer=init)
+        else:
             weight = tf.get_variable('W', shape=(input_dim, output_dim), initializer=init)
 
         if inputs.get_shape().ndims == 2:
@@ -66,7 +69,10 @@ def linear(name, input_dim, output_dim, inputs, initialization=None, biases=True
             result = tf.reshape(result, tf.stack(tf.unstack(tf.shape(inputs))[:-1] + [output_dim]))
 
         if biases:
-            with tf.device('/cpu:0'):
+            if variables_on_cpu:
+                with tf.device('/cpu:0'):
+                    bias = tf.get_variable('b', shape=(output_dim,), initializer=tf.zeros_initializer())
+            else:
                 bias = tf.get_variable('b', shape=(output_dim,), initializer=tf.zeros_initializer())
             result = tf.nn.bias_add(
                 result,

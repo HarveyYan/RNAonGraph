@@ -266,32 +266,39 @@ def load_fasta_format(file):
     return all_id, all_seq
 
 
-def load_dotbracket(filepath, pool=None, fold_algo='rnafold', probabilistic=False):
+def load_dotbracket(filepath, pool=None, fold_algo='rnafold', probabilistic=False, **kwargs):
     prefix = '%s_%s_' % (fold_algo, probabilistic)
     full_path = os.path.join(os.path.dirname(filepath), '{}structures.npy'.format(prefix))
     if not os.path.exists(full_path):
         print(full_path, 'is missing. Begin folding from scratch.')
-        fold_rna_from_file(filepath, pool, fold_algo, probabilistic)
+        fold_rna_from_file(filepath, pool, fold_algo, probabilistic, **kwargs)
     # load secondary structures
     all_struct = np.load(
         os.path.join(os.path.dirname(filepath), '{}structures.npy'.format(prefix)))
     return all_struct
 
 
-def load_mat(filepath, pool=None, fold_algo='rnafold', probabilistic=False):
+def load_mat(filepath, pool=None, fold_algo='rnafold', probabilistic=False, **kwargs):
     prefix = '%s_%s_' % (fold_algo, probabilistic)
     if not os.path.exists(os.path.join(os.path.dirname(filepath), '{}rel_mat.obj'.format(prefix))) or probabilistic and \
             not os.path.exists(os.path.join(os.path.dirname(filepath), '{}prob_mat.obj'.format(prefix))):
         print('adj mat or prob mat is missing. Begin folding from scratch.')
-        fold_rna_from_file(filepath, pool, fold_algo, probabilistic)
+        fold_rna_from_file(filepath, pool, fold_algo, probabilistic, **kwargs)
 
+    load_dense = kwargs.get('load_dense', True)
     sp_rel_matrix = pickle.load(open(os.path.join(os.path.dirname(filepath), '{}rel_mat.obj'.format(prefix)), 'rb'))
-    adjacency_matrix = np.array([mat.toarray() for mat in sp_rel_matrix])
+    if load_dense:
+        adjacency_matrix = np.array([mat.toarray() for mat in sp_rel_matrix])
+    else:
+        adjacency_matrix = np.array(sp_rel_matrix)
 
     if probabilistic:
         sp_prob_matrix = pickle.load(
             open(os.path.join(os.path.dirname(filepath), '{}prob_mat.obj'.format(prefix)), 'rb'))
-        probability_matrix = np.array([mat.toarray() for mat in sp_prob_matrix])
+        if load_dense:
+            probability_matrix = np.array([mat.toarray() for mat in sp_prob_matrix])
+        else:
+            probability_matrix = np.array(sp_prob_matrix)
         matrix = (adjacency_matrix, probability_matrix)
     else:
         matrix = adjacency_matrix
@@ -309,7 +316,7 @@ def load_seq(filepath):
     return all_id, all_seq
 
 
-def fold_rna_from_file(filepath, p=None, fold_algo='rnafold', probabilistic=False):
+def fold_rna_from_file(filepath, p=None, fold_algo='rnafold', probabilistic=False, **kwargs):
     assert (fold_algo in ['rnafold', 'rnasubopt', 'rnaplfold'])
     if fold_algo == 'rnafold':
         assert (probabilistic is False)
@@ -361,8 +368,10 @@ def fold_rna_from_file(filepath, p=None, fold_algo='rnafold', probabilistic=Fals
             pickle.dump(sp_prob_matrix,
                         open(os.path.join(os.path.dirname(filepath), '{}prob_mat.obj'.format(prefix)), 'wb'))
     elif fold_algo == 'rnaplfold':
-        fold_func = partial(fold_seq_rnaplfold, w=101, l=101, cutoff=1e-4, no_lonely_bps=True)
-        res = list(pool.imap(fold_func, all_seq))
+        winsize = kwargs.get('w', 70)
+        fold_func = partial(fold_seq_rnaplfold, w=winsize, l=winsize, cutoff=1e-4, no_lonely_bps=True)
+        from tqdm import tqdm
+        res = list(tqdm(pool.imap(fold_func, all_seq)))
         sp_rel_matrix = []
         sp_prob_matrix = []
         for rel_mat, prob_mat in res:

@@ -2,7 +2,7 @@ import tensorflow as tf
 import numpy as np
 
 
-def conv1d(name, input_dim, output_dim, filter_size, inputs, stride=1, he_init=True, biases=True, dilation=1, pad_mode='same'):
+def conv1d(name, input_dim, output_dim, filter_size, inputs, stride=1, he_init=True, biases=True, dilation=1, pad_mode='same', variables_on_cpu=True):
     with tf.variable_scope(name):
         # ignoring mask_type from original code
 
@@ -28,7 +28,11 @@ def conv1d(name, input_dim, output_dim, filter_size, inputs, stride=1, he_init=T
         else:  # Normalized init (Glorot)
             filters_stdev = np.sqrt(2 / (fan_in + fan_out))
 
-        with tf.device('/cpu:0'):
+        if variables_on_cpu:
+            with tf.device('/cpu:0'):
+                filters = tf.get_variable('filters', shape=(filter_size, input_dim, output_dim),
+                                          initializer=uniform_init(filters_stdev))
+        else:
             filters = tf.get_variable('filters', shape=(filter_size, input_dim, output_dim),
                                       initializer=uniform_init(filters_stdev))
 
@@ -41,7 +45,10 @@ def conv1d(name, input_dim, output_dim, filter_size, inputs, stride=1, he_init=T
         )
 
         if biases:
-            with tf.device('/cpu:0'):
+            if variables_on_cpu:
+                with tf.device('/cpu:0'):
+                    bias = tf.get_variable('bias', shape=(output_dim,), initializer=tf.initializers.zeros())
+            else:
                 bias = tf.get_variable('bias', shape=(output_dim,), initializer=tf.initializers.zeros())
             result = tf.nn.bias_add(result, bias)
 

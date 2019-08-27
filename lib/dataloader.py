@@ -34,12 +34,16 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
         pool = p
 
     clip_data = []
+    fold_kwargs = {}
 
     fold_algo = kwargs.get('fold_algo', 'rnafold')
     probabilistic = kwargs.get('probabilistic', False)
     load_mat = kwargs.get('load_mat', True)
     load_dotbracket = kwargs.get('load_dotbracket', False)
     augment_features = kwargs.get('augment_features', False)
+
+    if fold_algo == 'rnaplfold':
+        fold_kwargs['w'] = 101 # window size
 
     rbp_list = all_rbps if rbp_list is None else rbp_list
     for rbp in rbp_list:
@@ -49,7 +53,7 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
         permute = np.random.permutation(len(all_id))
 
         if load_mat:
-            matrix = lib.rna_utils.load_mat(filepath, pool, fold_algo, probabilistic)
+            matrix = lib.rna_utils.load_mat(filepath, pool, fold_algo, probabilistic, **fold_kwargs)
             if probabilistic:
                 adjacency_matrix, probability_matrix = matrix
                 dataset['train_prob_mat'] = probability_matrix[permute]
@@ -95,7 +99,7 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
         filepath = path_template.format(rbp, 'test_sample_0', 'sequences.fa.gz')
         all_id, all_seq = lib.rna_utils.load_seq(filepath)
         if load_mat:
-            matrix = lib.rna_utils.load_mat(filepath, pool, fold_algo, probabilistic)
+            matrix = lib.rna_utils.load_mat(filepath, pool, fold_algo, probabilistic, **fold_kwargs)
             if probabilistic:
                 adjacency_matrix, probability_matrix = matrix
                 dataset['test_prob_mat'] = probability_matrix
