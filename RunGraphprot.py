@@ -46,9 +46,6 @@ BATCH_SIZE = FLAGS.batch_size
 EPOCHS = FLAGS.epochs  # How many iterations to train for
 DEVICES = ['/gpu:%s' % (device) for device in FLAGS.gpu_device] if len(FLAGS.gpu_device) > 0 else ['/cpu:0']
 RBP_LIST = lib.graphprot_dataloader.all_rbps
-MAX_LEN = 101
-
-TRAIN_RBP_ID = FLAGS.train_rbp_id
 assert (TRAIN_RBP_ID in RBP_LIST)
 
 if FLAGS.share_device:
@@ -61,7 +58,7 @@ if FLAGS.parallel_processes > len(DEVICES):
     FLAGS.parallel_processes = len(DEVICES)
 
 hp = {
-    'learning_rate': 2e-4,
+    'learning_rate': 1e-3,
     'dropout_rate': 0.2,
     'use_clr': FLAGS.use_clr,
     'use_momentum': FLAGS.use_momentum,
@@ -72,6 +69,7 @@ hp = {
     'lstm_ggnn': FLAGS.lstm_ggnn,
     'use_conv': FLAGS.use_conv,
     'probabilistic': FLAGS.probabilistic,
+    'lstm_encoder': True,
 }
 
 

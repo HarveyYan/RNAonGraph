@@ -5,7 +5,6 @@ import RNA
 import gzip
 import pickle
 import random
-import shutil
 import subprocess
 import numpy as np
 import scipy.sparse as sp
@@ -34,19 +33,14 @@ equilibrium probability using RNAplfold
 
 
 def fold_seq_rnaplfold(seq, w, l, cutoff, no_lonely_bps):
-    pwd = os.getcwd()
     np.random.seed(random.seed())
     name = str(np.random.rand())
-    if 'SLURM_TMPDIR' in os.environ:
-        name = os.path.join(os.environ['SLURM_TMPDIR'], name)
-    os.makedirs(name)
-    os.chdir(name)
 
     # Call RNAplfold on command line.
     no_lonely_bps_str = ""
     if no_lonely_bps:
         no_lonely_bps_str = "--noLP"
-    cmd = 'echo %s | RNAplfold -W %d -L %d -c %.4f %s' % (seq, w, l, cutoff, no_lonely_bps_str)
+    cmd = 'echo %s | RNAplfold -W %d -L %d -c %.4f --id-prefix %s %s' % (seq, w, l, cutoff, name, no_lonely_bps_str)
     ret = subprocess.call(cmd, shell=True)
 
     # assemble adjacency matrix
@@ -62,8 +56,9 @@ def fold_seq_rnaplfold(seq, w, l, cutoff, no_lonely_bps):
             link.append(2)
             prob.append(1.)
     # Extract base pair information.
+    name += '_0001_dp.ps'
     start_flag = False
-    with open('plfold_dp.ps') as f:
+    with open(name) as f:
         for line in f:
             if start_flag:
                 values = line.split()
@@ -74,16 +69,14 @@ def fold_seq_rnaplfold(seq, w, l, cutoff, no_lonely_bps):
                     # source_id < dest_id
                     row_col.append((source_id, dest_id))
                     link.append(3)
-                    prob.append(avg_prob)
+                    prob.append(avg_prob**2)
                     row_col.append((dest_id, source_id))
                     link.append(4)
-                    prob.append(avg_prob)
+                    prob.append(avg_prob**2)
             if 'start of base pair probability data' in line:
                 start_flag = True
     # delete RNAplfold output file.
-    os.remove('plfold_dp.ps')
-    os.chdir(pwd)
-    shutil.rmtree(name)
+    os.remove(name)
     # placeholder for dot-bracket structure
     return (sp.csr_matrix((link, (np.array(row_col)[:, 0], np.array(row_col)[:, 1])), shape=(length, length)),
             sp.csr_matrix((prob, (np.array(row_col)[:, 0], np.array(row_col)[:, 1])), shape=(length, length)),)
@@ -280,7 +273,8 @@ def load_dotbracket(filepath, pool=None, fold_algo='rnafold', probabilistic=Fals
 
 def load_mat(filepath, pool=None, fold_algo='rnafold', probabilistic=False, **kwargs):
     prefix = '%s_%s_' % (fold_algo, probabilistic)
-    if not os.path.exists(os.path.join(os.path.dirname(filepath), '{}rel_mat.obj'.format(prefix))) or probabilistic and \
+    force_folding = kwargs.get('force_folding', False)
+    if force_folding or not os.path.exists(os.path.join(os.path.dirname(filepath), '{}rel_mat.obj'.format(prefix))) or probabilistic and \
             not os.path.exists(os.path.join(os.path.dirname(filepath), '{}prob_mat.obj'.format(prefix))):
         print('adj mat or prob mat is missing. Begin folding from scratch.')
         fold_rna_from_file(filepath, pool, fold_algo, probabilistic, **kwargs)
@@ -335,8 +329,7 @@ def fold_rna_from_file(filepath, p=None, fold_algo='rnafold', probabilistic=Fals
 
     if fold_algo == 'rnafold':
         fold_func = fold_seq_rnafold
-        from tqdm import tqdm
-        res = list(tqdm(pool.imap(fold_func, all_seq)))
+        res = list(pool.imap(fold_func, all_seq))
         sp_rel_matrix = []
         structural_content = []
         for struct, matrix in res:
@@ -369,9 +362,12 @@ def fold_rna_from_file(filepath, p=None, fold_algo='rnafold', probabilistic=Fals
                         open(os.path.join(os.path.dirname(filepath), '{}prob_mat.obj'.format(prefix)), 'wb'))
     elif fold_algo == 'rnaplfold':
         winsize = kwargs.get('w', 70)
+        pwd = os.getcwd()
+        if 'SLURM_TMPDIR' in os.environ:
+            os.chdir(os.environ['SLURM_TMPDIR'])
         fold_func = partial(fold_seq_rnaplfold, w=winsize, l=winsize, cutoff=1e-4, no_lonely_bps=True)
-        from tqdm import tqdm
-        res = list(tqdm(pool.imap(fold_func, all_seq)))
+        res = list(pool.imap(fold_func, all_seq))
+        os.chdir(pwd)
         sp_rel_matrix = []
         sp_prob_matrix = []
         for rel_mat, prob_mat in res:
@@ -567,7 +563,7 @@ if __name__ == "__main__":
         'TGTGAAGCGCGGCTAGCTGCCGGGGTTCGAGGTGGGTCCCAGGGTTAAAATCCCTTGTTGTCTTACTGGTGGCAGCAAGCTAGGACTATACTCCTCGGTCG',
         101, 101, 0.0001, True)
     print(res[0].todense())
-    print(res[1].todense())
+    print(res[1].todense().sum(axis=-1))
 
     # with open('boltzmann-sampling-acc.txt', 'w') as file:
     #     for amount in [5, 10, 100, 1000, 5000, 10000]:

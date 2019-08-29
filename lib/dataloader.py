@@ -2,6 +2,7 @@ import os
 import sys
 import numpy as np
 from gensim.models import Word2Vec
+from sklearn.model_selection import KFold
 
 basedir = os.path.split(os.path.dirname(os.path.abspath(__file__)))[0]
 sys.path.append(basedir)
@@ -44,6 +45,7 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
 
     if fold_algo == 'rnaplfold':
         fold_kwargs['w'] = 101 # window size
+        fold_kwargs['force_folding'] = kwargs.get('force_folding', False)
 
     rbp_list = all_rbps if rbp_list is None else rbp_list
     for rbp in rbp_list:
@@ -56,15 +58,15 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
             matrix = lib.rna_utils.load_mat(filepath, pool, fold_algo, probabilistic, **fold_kwargs)
             if probabilistic:
                 adjacency_matrix, probability_matrix = matrix
-                dataset['train_prob_mat'] = probability_matrix[permute]
+                train_prob_mat = probability_matrix[permute]
             else:
                 adjacency_matrix = matrix
-            dataset['train_adj_mat'] = adjacency_matrix[permute]
+            train_adj_mat = adjacency_matrix[permute]
 
-        dataset['train_label'] = np.array([int(id.split(' ')[-1].split(':')[-1]) for id in all_id])[permute]
+        train_label = np.array([int(id.split(' ')[-1].split(':')[-1]) for id in all_id])[permute]
         if augment_features:
             # additional features: [size, length, features_dim]
-            dataset['train_features'] = \
+            train_features = \
             lib.rna_utils.augment_features(path_template.format(rbp, 'training_sample_0', ''))[permute]
 
         if load_dotbracket:
@@ -72,7 +74,7 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
             # # VOCAB_STRUCT = ['.', '(', ')']
             # # VOCAB_STRUCT_VEC = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]]).astype(np.float32)
             # [size, length, 3]
-            dataset['train_struct'] = lib.rna_utils.load_dotbracket(filepath, pool, fold_algo, probabilistic)[permute]
+            train_struct = lib.rna_utils.load_dotbracket(filepath, pool, fold_algo, probabilistic)[permute]
 
         use_embedding = kwargs.get('use_embedding', False)
         kmer_len = kwargs.get('kmer_len', 3)
@@ -87,13 +89,13 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
             VOCAB = ['NOT_FOUND'] + list(word2vec_model.wv.vocab.keys())
             VOCAB_VEC = np.concatenate([np.zeros((1, emb_size)).astype(np.float32), word2vec_model.wv.vectors], axis=0)
             kmers = get_kmers(all_seq, kmer_len)
-            dataset['train_seq'] = np.array([[VOCAB.index(c) for c in seq] for seq in kmers])[permute]
+            train_seq = np.array([[VOCAB.index(c) for c in seq] for seq in kmers])[permute]
         else:
             VOCAB = ['NOT_FOUND', 'A', 'C', 'G', 'T', 'N']
             VOCAB_VEC = np.array([[0, 0, 0, 0, 0], [1, 0, 0, 0, 0], [0, 1, 0, 0, 0], [0, 0, 1, 0, 0], [0, 0, 0, 1, 0],
                                   [0, 0, 0, 0, 1]]).astype(
                 np.float32)
-            dataset['train_seq'] = np.array([[VOCAB.index(c) for c in seq] for seq in all_seq])[permute]
+            train_seq = np.array([[VOCAB.index(c) for c in seq] for seq in all_seq])[permute]
 
         # load test set
         filepath = path_template.format(rbp, 'test_sample_0', 'sequences.fa.gz')
@@ -102,27 +104,61 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
             matrix = lib.rna_utils.load_mat(filepath, pool, fold_algo, probabilistic, **fold_kwargs)
             if probabilistic:
                 adjacency_matrix, probability_matrix = matrix
-                dataset['test_prob_mat'] = probability_matrix
+                test_prob_mat = probability_matrix
             else:
                 adjacency_matrix = matrix
-            dataset['test_adj_mat'] = adjacency_matrix
+            test_adj_mat = adjacency_matrix
 
-        dataset['test_label'] = np.array([int(id.split(' ')[-1].split(':')[-1]) for id in all_id])
+        test_label = np.array([int(id.split(' ')[-1].split(':')[-1]) for id in all_id])
 
         if kwargs.get('augment_features', False):
-            dataset['test_features'] = lib.rna_utils.augment_features(path_template.format(rbp, 'test_sample_0', ''))
+            test_features = lib.rna_utils.augment_features(path_template.format(rbp, 'test_sample_0', ''))
 
         if load_dotbracket:
-            dataset['test_struct'] = lib.rna_utils.load_dotbracket(filepath, pool, fold_algo, probabilistic)
+            test_struct = lib.rna_utils.load_dotbracket(filepath, pool, fold_algo, probabilistic)
 
         if use_embedding:
             kmers = get_kmers(all_seq, kmer_len)
-            dataset['test_seq'] = np.array([[VOCAB.index(c) if c in VOCAB else 0 for c in seq] for seq in kmers])
+            test_seq = np.array([[VOCAB.index(c) if c in VOCAB else 0 for c in seq] for seq in kmers])
         else:
-            dataset['test_seq'] = np.array([[VOCAB.index(c) if c in VOCAB else 0 for c in seq] for seq in all_seq])
+            test_seq = np.array([[VOCAB.index(c) if c in VOCAB else 0 for c in seq] for seq in all_seq])
 
         dataset['VOCAB'] = VOCAB
         dataset['VOCAB_VEC'] = VOCAB_VEC
+
+        if kwargs.get('use_cross_validation', False):
+            dataset['seq'] = np.concatenate([train_seq, test_seq], axis=0)
+            dataset['label'] = np.concatenate([train_label, test_label], axis=0)
+            if load_mat:
+                dataset['adj_mat'] = np.concatenate([train_adj_mat, test_adj_mat], axis=0)
+                if probabilistic:
+                    dataset['prob_mat'] = np.concatenate([train_prob_mat, test_prob_mat], axis=0)
+            if augment_features:
+                dataset['features'] = np.concatenate([train_features, test_features], axis=0)
+            if load_dotbracket:
+                dataset['struct'] = np.concatenate([train_struct, test_struct], axis=0)
+
+            kf = KFold(n_splits=10)
+            splits = kf.split(dataset['seq'])
+            dataset['splits'] = list(splits)
+        else:
+            dataset['train_seq'] = train_seq
+            dataset['test_seq'] = test_seq
+            dataset['train_label'] = train_label
+            dataset['test_label'] = test_label
+            if load_mat:
+                dataset['train_adj_mat'] = train_adj_mat
+                dataset['test_adj_mat'] = test_adj_mat
+                if probabilistic:
+                    dataset['train_prob_mat'] = train_prob_mat
+                    dataset['test_prob_mat'] = test_prob_mat
+            if augment_features:
+                dataset['train_features'] = train_features
+                dataset['test_features'] = test_features
+            if load_dotbracket:
+                dataset['train_struct'] = train_struct
+                dataset['test_struct'] = test_struct
+
         clip_data.append(dataset)
 
     if p is None:
