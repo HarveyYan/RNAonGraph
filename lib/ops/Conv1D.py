@@ -2,7 +2,7 @@ import tensorflow as tf
 import numpy as np
 
 
-def conv1d(name, input_dim, output_dim, filter_size, inputs, stride=1, he_init=True, biases=True, dilation=1, pad_mode='same', variables_on_cpu=True):
+def conv1d(name, input_dim, output_dim, filter_size, inputs, stride=1, he_init=True, biases=True, dilation=1, pad_mode='SAME', variables_on_cpu=True):
     with tf.variable_scope(name):
         # ignoring mask_type from original code
 

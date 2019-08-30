@@ -30,6 +30,7 @@ BOND_TYPE = {
 def _initialize():
     if len(all_rbps) == 0:
         print('reorganizing graphprot dataset')
+
         def __reorganize_dir():
             all_rbps = set([dir.split('.')[0] for dir in os.listdir(clip_data_path)])
             path_template = os.path.join(basedir, 'Data', 'GraphProt_CLIP_sequences', '{}.{}.{}.fa')
@@ -40,6 +41,7 @@ def _initialize():
                         if not os.path.exists(dir_to):
                             os.makedirs(dir_to)
                         os.rename(path_template.format(rbp, split, label), os.path.join(dir_to, 'data.fa'))
+
         __reorganize_dir()
 
 
@@ -77,7 +79,7 @@ def split_matrix_by_relation(mat):
     '''
     length = mat.shape[0]
     a, b, c, d = sp.triu(mat, 1), sp.triu(mat, 2), sp.tril(mat, -1), sp.tril(mat, -2)
-    rel_mats = [(a-b).tocoo(), (c-d).tocoo(), b, d]
+    rel_mats = [(a - b).tocoo(), (c - d).tocoo(), b, d]
     return [rm.data for rm in rel_mats], \
            [np.stack([rm.row, rm.col], axis=1) for rm in rel_mats], length
 
@@ -88,7 +90,7 @@ def split_matrices_by_relation(sparse_matrices, pool):
     '''
     from tqdm import tqdm
     ret = np.array(list(tqdm(pool.imap(split_matrix_by_relation, sparse_matrices))))
-    return ret[:,0], ret[:,1], ret[:, 2]
+    return ret[:, 0], ret[:, 1], ret[:, 2]
 
 
 def split_matrix_triu(mat):
@@ -106,7 +108,7 @@ def split_matrices_triu(sparse_matrices, pool):
     '''
     from tqdm import tqdm
     ret = np.array(list(tqdm(pool.imap(split_matrix_triu, sparse_matrices))))
-    return ret[:,0], ret[:,1], ret[:, 2]
+    return ret[:, 0], ret[:, 1], ret[:, 2]
 
 
 def load_clip_seq(rbp_list=None, p=None, **kwargs):
@@ -115,13 +117,14 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
     needs to be computed at the data loading stage
     '''
     if p is None:
-        pool = Pool(min(int(mp.cpu_count()*2/3), 12))
+        pool = Pool(min(int(mp.cpu_count() * 2 / 3), 12))
     else:
         pool = p
 
     fold_algo = kwargs.get('fold_algo', 'rnafold')
     probabilistic = kwargs.get('probabilistic', False)
     load_mat = kwargs.get('load_mat', True)
+    force_folding = kwargs.get('force_folding', False)
 
     clip_data = []
 
@@ -138,9 +141,11 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
         if load_mat:
             # load sparse matrices
             pos_matrix = lib.rna_utils.load_mat(path_template.format(rbp, 'train', 'positives')
-                                                , pool, fold_algo, probabilistic, load_dense=False)
+                                                , pool, fold_algo, probabilistic, load_dense=False,
+                                                force_folding=force_folding)
             neg_matrix = lib.rna_utils.load_mat(path_template.format(rbp, 'train', 'negatives')
-                                                , pool, fold_algo, probabilistic, load_dense=False)
+                                                , pool, fold_algo, probabilistic, load_dense=False,
+                                                force_folding=force_folding)
             if probabilistic:
                 # we can do this simply because the secondary structure is not a multigraph
                 pos_adjacency_matrix, pos_probability_matrix = pos_matrix
@@ -226,13 +231,13 @@ def pretrain_word2vec(seqs, kmer_len, window, embedding_size, save_path):
 
 if __name__ == "__main__":
     from scipy.sparse import csr_matrix
+
     row = np.array([0, 1, 1, 2, 0, 2])
     col = np.array([1, 2, 0, 1, 2, 0])
     data = np.array([1, 1, 2, 2, 3, 4])
     test_mat = csr_matrix((data, (row, col)), shape=(3, 3))
     print(test_mat.toarray())
-    all_data, all_row_col, segment_size = split_matrices_triu([test_mat]*2, mp.Pool(2))
+    all_data, all_row_col, segment_size = split_matrices_triu([test_mat] * 2, mp.Pool(2))
     print(all_data.shape)
     print(all_row_col[0])
     print(segment_size.shape)
-

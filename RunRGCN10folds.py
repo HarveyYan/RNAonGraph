@@ -38,7 +38,7 @@ if FLAGS.fold_algo == 'rnafold':
 if FLAGS.fold_algo == 'rnaplfold':
     assert (FLAGS.probabilistic is True)
 
-BATCH_SIZE = 200  # * FLAGS.nb_gpus if FLAGS.nb_gpus > 0 else 200
+BATCH_SIZE = 128
 TRAIN_RBP_ID = FLAGS.train_rbp_id
 EPOCHS = FLAGS.epochs  # How many iterations to train for
 DEVICES = ['/gpu:%d' % (i) for i in range(FLAGS.nb_gpus)] if FLAGS.nb_gpus > 0 else ['/cpu:0']
@@ -108,7 +108,6 @@ def run_one_rbp(fold_idx, q):
     all_prediction, acc, auc = model.predict(test_data, BATCH_SIZE, y=dataset['label'][test_idx])
     print('Evaluation on test set, acc: %.3f, auc: %.3f' % (acc, auc))
     model.delete()
-    del dataset
     reload(lib.plot)
     reload(lib.logger)
     q.put({
@@ -123,9 +122,9 @@ if __name__ == "__main__":
     cur_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     if FLAGS.output_dir == '':
-        output_dir = os.path.join('output', 'RGCN', cur_time)
+        output_dir = os.path.join('output', 'RGCN10folds', cur_time)
     else:
-        output_dir = os.path.join('output', 'RGCN', cur_time + '-' + FLAGS.output_dir)
+        output_dir = os.path.join('output', 'RGCN10folds', cur_time + '-' + FLAGS.output_dir)
 
     os.makedirs(output_dir)
     lib.plot.set_output_dir(output_dir)
@@ -143,12 +142,11 @@ if __name__ == "__main__":
     dataset = lib.dataloader.load_clip_seq([TRAIN_RBP_ID], use_embedding=FLAGS.use_embedding, fold_algo=FLAGS.fold_algo,
                                            force_folding=FLAGS.force_folding, augment_features=FLAGS.augment_features,
                                            probabilistic=FLAGS.probabilistic, use_cross_validation=True)[0]  # load one at a time
-
     manager = mp.Manager()
     q = manager.Queue()
     pool = Pool(FLAGS.parallel_processes + 1)
     logger_thread = pool.apply_async(Logger, (q,))
-    pool.map(functools.partial(run_one_rbp, q=q), list(range(len(RBP_LIST))), chunksize=1)
+    pool.map(functools.partial(run_one_rbp, q=q), list(range(len(dataset['splits']))), chunksize=1)
 
     q.put('kill')  # terminate logger thread
     pool.close()

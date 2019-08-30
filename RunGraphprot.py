@@ -19,7 +19,7 @@ tf.app.flags.DEFINE_list('gpu_device', '0,1', '')
 tf.app.flags.DEFINE_bool('use_clr', True, '')
 tf.app.flags.DEFINE_bool('use_momentum', False, '')
 tf.app.flags.DEFINE_integer('parallel_processes', 1, '')
-tf.app.flags.DEFINE_integer('batch_size', 200, '')
+tf.app.flags.DEFINE_integer('batch_size', 128, '')
 tf.app.flags.DEFINE_bool('share_device', False, '')
 # some experiment settings
 tf.app.flags.DEFINE_bool('use_attention', False, '')
@@ -32,6 +32,7 @@ tf.app.flags.DEFINE_bool('probabilistic', True, '')
 tf.app.flags.DEFINE_string('fold_algo', 'rnaplfold', '')
 # major changes !
 tf.app.flags.DEFINE_string('train_rbp_id', 'PARCLIP_PUM2', '')
+tf.app.flags.DEFINE_bool('force_folding', False, '')
 FLAGS = tf.app.flags.FLAGS
 
 assert (FLAGS.fold_algo in ['rnafold', 'rnasubopt', 'rnaplfold'])
@@ -191,7 +192,7 @@ if __name__ == "__main__":
 
     dataset = \
         lib.graphprot_dataloader.load_clip_seq([TRAIN_RBP_ID], use_embedding=FLAGS.use_embedding,
-                                               fold_algo=FLAGS.fold_algo,
+                                               fold_algo=FLAGS.fold_algo, force_folding=FLAGS.force_folding,
                                                probabilistic=FLAGS.probabilistic)[0]  # load one at a time
     manager = mp.Manager()
     q = manager.Queue()

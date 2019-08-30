@@ -36,6 +36,10 @@ def fold_seq_rnaplfold(seq, w, l, cutoff, no_lonely_bps):
     np.random.seed(random.seed())
     name = str(np.random.rand())
 
+    pwd = os.getcwd()
+    if 'SLURM_TMPDIR' in os.environ:
+        os.chdir(os.environ['SLURM_TMPDIR'])
+
     # Call RNAplfold on command line.
     no_lonely_bps_str = ""
     if no_lonely_bps:
@@ -77,6 +81,7 @@ def fold_seq_rnaplfold(seq, w, l, cutoff, no_lonely_bps):
                 start_flag = True
     # delete RNAplfold output file.
     os.remove(name)
+    os.chdir(pwd)
     # placeholder for dot-bracket structure
     return (sp.csr_matrix((link, (np.array(row_col)[:, 0], np.array(row_col)[:, 1])), shape=(length, length)),
             sp.csr_matrix((prob, (np.array(row_col)[:, 0], np.array(row_col)[:, 1])), shape=(length, length)),)
@@ -362,12 +367,8 @@ def fold_rna_from_file(filepath, p=None, fold_algo='rnafold', probabilistic=Fals
                         open(os.path.join(os.path.dirname(filepath), '{}prob_mat.obj'.format(prefix)), 'wb'))
     elif fold_algo == 'rnaplfold':
         winsize = kwargs.get('w', 70)
-        pwd = os.getcwd()
-        if 'SLURM_TMPDIR' in os.environ:
-            os.chdir(os.environ['SLURM_TMPDIR'])
         fold_func = partial(fold_seq_rnaplfold, w=winsize, l=winsize, cutoff=1e-4, no_lonely_bps=True)
         res = list(pool.imap(fold_func, all_seq))
-        os.chdir(pwd)
         sp_rel_matrix = []
         sp_prob_matrix = []
         for rel_mat, prob_mat in res:
