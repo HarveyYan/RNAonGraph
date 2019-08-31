@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import numpy as np
 import tensorflow as tf
 from . import _average_gradients, _stats
@@ -10,7 +11,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import lib.plot, lib.logger, lib.clr
 import lib.ops.LSTM, lib.ops.Linear
-from lib.resutils import normalize
+import lib.ops.Conv1D
 
 
 class RNATracker:
@@ -31,7 +32,7 @@ class RNATracker:
         self.use_bn = kwargs.get('use_bn', False)
 
         self.g = tf.get_default_graph()
-        with self.g.as_default():
+        with self.g.as_default(), tf.device('/cpu:0'), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
             self._placeholders()
             if self.use_momentum:
                 self.optimizer = tf.contrib.opt.MomentumWOptimizer(
@@ -45,17 +46,18 @@ class RNATracker:
                 )
 
             for i, device in enumerate(self.gpu_device_list):
-                with tf.device(device), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
+                with tf.device(device), tf.name_scope('tower_%d'%(i)):
                     self._build_rnatracker(i, mode='training')
                     self._loss(i)
                     self._train(i)
 
-            with tf.device(self.gpu_device_list[0]), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
+            with tf.name_scope('inference'):
                 self._build_rnatracker(None, mode='inference')
 
             self._merge()
-            self.train_op = self.optimizer.apply_gradients(self.gv)
             _stats('RNATracker', self.gv)
+            self.train_op = self.optimizer.apply_gradients(self.gv)
+            print(tf.trainable_variables())
             self.saver = tf.train.Saver(max_to_keep=10)
             self.init = tf.global_variables_initializer()
             self.local_init = tf.local_variables_initializer()
@@ -89,23 +91,22 @@ class RNATracker:
             raise ValueError('unknown mode')
 
         with tf.variable_scope('seq_scan'):
-            output = tf.layers.conv1d(node_tensor, self.units, 10, padding='same', use_bias=False, name='conv1')
-            output = normalize('bn1', output, self.is_training_ph, self.use_bn)
+            output = lib.ops.Conv1D.conv1d('conv1', self.node_dim, self.units, 10, node_tensor, biases=False)
             output = tf.nn.relu(output)
+            # output = tf.layers.max_pooling1d(output, 3, 1, padding='same')
             output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
 
-            output = tf.layers.conv1d(output, self.units, 10, padding='same', use_bias=False, name='conv2')
-            output = normalize('bn2', output, self.is_training_ph, self.use_bn)
+            output = lib.ops.Conv1D.conv1d('conv2', self.units, self.units, 10, output, biases=False)
             output = tf.nn.relu(output)
+            # output = tf.layers.max_pooling1d(output, 3, 1, padding='same')
             output = tf.layers.dropout(output, self.dropout_rate, training=self.is_training_ph)
 
         with tf.variable_scope('set2set_pooling'):
             output = lib.ops.LSTM.set2set_pooling('set2set_pooling', output, self.pool_steps, self.dropout_rate,
-                                                  self.is_training_ph,
-                                                  self.lstm_encoder)
+                                                  self.is_training_ph, self.lstm_encoder)
+
             output = lib.ops.Linear.linear('OutputMapping', output.get_shape().as_list()[-1], 2,
                                            output)  # categorical logits
-
         if mode == 'training':
             if not hasattr(self, 'output'):
                 self.output = [output]
@@ -131,7 +132,9 @@ class RNATracker:
 
     def _train(self, split_idx):
         gv = self.optimizer.compute_gradients(self.cost[split_idx],
-                                              var_list=[var for var in tf.trainable_variables()])
+                                              var_list=[var for var in tf.trainable_variables()],
+                                              colocate_gradients_with_ops=True
+                                              )
 
         if not hasattr(self, 'gv'):
             self.gv = [gv]
@@ -169,6 +172,10 @@ class RNATracker:
     def _init_session(self):
         gpu_options = tf.GPUOptions()
         gpu_options.allow_growth = True
+        if type(self.gpu_device_list) is list:
+            gpu_options.visible_device_list = ','.join([device[-1] for device in self.gpu_device_list])
+        else:
+            gpu_options.visible_device_list = self.gpu_device_list[-1]
         self.sess = tf.Session(graph=self.g, config=tf.ConfigProto(gpu_options=gpu_options))
         self.sess.run(self.init)
         self.sess.run(self.local_init)
@@ -201,7 +208,6 @@ class RNATracker:
         else:
             dev_node_tensor = dev_data
 
-
         train_rmd = node_tensor.shape[0] % len(self.gpu_device_list)
         if train_rmd != 0:
             node_tensor = node_tensor[:-train_rmd]
@@ -229,7 +235,7 @@ class RNATracker:
             if train_rmd != 0:
                 node_tensor = node_tensor[:-train_rmd]
                 y = y[:-train_rmd]
-
+            start_time = time.time()
             for i in range(iters_per_epoch):
                 _node_tensor, _labels \
                     = node_tensor[i * batch_size: (i + 1) * batch_size], \
@@ -242,7 +248,7 @@ class RNATracker:
                                          self.hf_iters_per_epoch: iters_per_epoch // 2,
                                          self.is_training_ph: True}
                               )
-
+            lib.plot.plot('train_time_per_epoch', (time.time() - start_time)/iters_per_epoch)
             train_cost, train_acc, train_auc = \
                 self.evaluate(node_tensor, y, batch_size)
             lib.plot.plot('train_cost', train_cost)

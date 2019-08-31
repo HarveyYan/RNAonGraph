@@ -59,7 +59,7 @@ if FLAGS.parallel_processes > len(DEVICES):
     FLAGS.parallel_processes = len(DEVICES)
 
 hp = {
-    'learning_rate': 1e-3,
+    'learning_rate': 2e-4,
     'dropout_rate': 0.2,
     'use_clr': FLAGS.use_clr,
     'use_momentum': FLAGS.use_momentum,

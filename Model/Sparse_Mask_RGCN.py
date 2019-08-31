@@ -286,8 +286,8 @@ class SparseMaskRGCN:
             pos_idx, neg_idx = np.where(np.count_nonzero(y, axis=-1) > 0)[0], \
                                np.where(np.count_nonzero(y, axis=-1) == 0)[0]
 
-        dev_idx = np.array(list(np.random.choice(pos_idx, int(len(pos_idx) * 0.1), False)) + \
-                           list(np.random.choice(neg_idx, int(len(neg_idx) * 0.1), False)))
+        dev_idx = np.array(list(np.random.choice(pos_idx, int(len(pos_idx) * 0.2), False)) + \
+                           list(np.random.choice(neg_idx, int(len(neg_idx) * 0.2), False)))
         train_idx = np.delete(np.arange(len(y)), dev_idx)
 
         dev_data = self.indexing_iterable(X, dev_idx)

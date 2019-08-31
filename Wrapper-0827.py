@@ -11,7 +11,7 @@ from Model.OldRNATracker import RNATracker
 tf.logging.set_verbosity(tf.logging.FATAL)
 tf.app.flags.DEFINE_string('output_dir', '', '')
 tf.app.flags.DEFINE_integer('epochs', 50, '')
-tf.app.flags.DEFINE_integer('nb_gpus', 1, '')
+tf.app.flags.DEFINE_list('gpu_device', '0', '')
 tf.app.flags.DEFINE_bool('use_clr', True, '')
 tf.app.flags.DEFINE_integer('units', 128, '')
 tf.app.flags.DEFINE_integer('maxlen', 100, '')
@@ -39,9 +39,9 @@ else:
     assert (os.path.exists(FLAGS.valid_fasta_path))
     assert (os.path.exists(FLAGS.test_fasta_path))
 
-BATCH_SIZE = 200  # 200 * FLAGS.nb_gpus if FLAGS.nb_gpus > 0 else 200
+BATCH_SIZE = 128
 EPOCHS = FLAGS.epochs  # How many iterations to train for
-DEVICES = ['/gpu:%d' % (i) for i in range(FLAGS.nb_gpus)] if FLAGS.nb_gpus > 0 else ['/cpu:0']
+DEVICES = ['/gpu:%s' % (device) for device in FLAGS.gpu_device] if len(FLAGS.gpu_device) > 0 else ['/cpu:0']
 MAX_LEN = FLAGS.maxlen
 
 hp = {
@@ -53,10 +53,29 @@ hp = {
 }
 
 
+def load_faizy_format(file):
+    all_header = []
+    all_seq = []
+    for row in file:
+        if type(row) is bytes:
+            row = row.decode('utf-8')
+        row = row.rstrip()
+        # all_label.append(int(row.split('class:')[-1][0]))
+        all_header.append(row.split(' ')[0])
+        all_seq.append(row.split(' ')[2])
+    return all_header, all_seq
+
+
+def load_seq(filepath):
+    file = open(filepath, 'r')
+    all_header, all_seq = load_faizy_format(file)
+    return all_header, all_seq
+
+
 def run():
-    # outfile = open(os.path.join(output_dir, str(os.getpid())) + ".out", "w")
-    # sys.stdout = outfile
-    # sys.stderr = outfile
+    outfile = open(os.path.join(output_dir, str(os.getpid())) + ".out", "w")
+    sys.stdout = outfile
+    sys.stderr = outfile
 
     # P stands for unknown character, which should not appear at all in any fasta file
     VOCAB = ['NOT_FOUND', 'A', 'C', 'G', 'T', 'N']
@@ -65,8 +84,7 @@ def run():
 
     if FLAGS.predict_orthologous:
 
-        all_id, all_seq = lib.rna_utils.load_seq(FLAGS.ortho_fasta_path)
-        # labels = np.array([int(id.split(' ')[-1].split(':')[-1]) for id in all_id])
+        all_header, all_seq = load_seq(FLAGS.ortho_fasta_path)
         seqs = np.array([[VOCAB.index(c) for c in seq] for seq in all_seq])
         assert(seqs.shape[1]==MAX_LEN)
         model = RNATracker(MAX_LEN, VOCAB_VEC.shape[1], DEVICES, **hp)
@@ -74,21 +92,21 @@ def run():
         model.load(FLAGS.weight_params_path)
         all_preds = model.predict(seqs, BATCH_SIZE)
         with open(os.path.join(output_dir, 'prediction.fa'), 'w') as output_file:
-            for header, pred in zip(all_id, all_preds):
+            for header, pred in zip(all_header, all_preds):
                 output_file.write('%s %.4f\n' % (header, pred[1]))
 
     else:
 
-        train_id, train_seq = lib.rna_utils.load_seq(FLAGS.train_fasta_path)
-        train_labels = np.array([int(id.split(' ')[-1]) for id in train_id])
+        train_headers, train_seq = load_seq(FLAGS.train_fasta_path)
+        train_labels = np.array([int(header.split('class:')[-1][0]) for header in train_headers])
         train_seq = np.array([[VOCAB.index(c) for c in seq] for seq in train_seq])
         assert (train_seq.shape[1] == MAX_LEN)
-        valid_id, valid_seq = lib.rna_utils.load_seq(FLAGS.valid_fasta_path)
-        valid_labels = np.array([int(id.split(' ')[-1]) for id in valid_id])
+        valid_headers, valid_seq = load_seq(FLAGS.valid_fasta_path)
+        valid_labels = np.array([int(header.split('class:')[-1][0]) for header in valid_headers])
         valid_seq = np.array([[VOCAB.index(c) for c in seq] for seq in valid_seq])
         assert (valid_seq.shape[1] == MAX_LEN)
-        test_id, test_seq = lib.rna_utils.load_seq(FLAGS.test_fasta_path)
-        test_labels = np.array([int(id.split(' ')[-1]) for id in test_id])
+        test_headers, test_seq = load_seq(FLAGS.test_fasta_path)
+        test_labels = np.array([int(header.split('class:')[-1][0]) for header in test_headers])
         test_seq = np.array([[VOCAB.index(c) for c in seq] for seq in test_seq])
         assert (test_seq.shape[1] == MAX_LEN)
 
