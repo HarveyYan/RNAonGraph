@@ -66,7 +66,9 @@ class RGCN:
 
             for i, device in enumerate(self.gpu_device_list):
                 # if we don't use name_scope, the operation id will automatically increment
-                with tf.device(device), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
+                # Warning. Tensorflow always indexes gpu from 0 (moronically)
+                # and remember to set the CUDA_VISIBLE_DEVICES or gpu_option.gpu_device_list to the real ids
+                with tf.device('/gpu:%d'%(i)), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
                     if self.test_gated_nn:
                         self._build_ggnn(i, mode='training')
                     else:
@@ -150,7 +152,7 @@ class RGCN:
         node_tensor = tf.nn.embedding_lookup(embedding, node_tensor)
 
         if self.probabilistic:
-            adj_tensor = adj_tensor * prob_mat[:, :, :,  None]  # assigning probabilities to relations
+            adj_tensor = adj_tensor * prob_mat[:, :, :, None]  # assigning probabilities to relations
 
         if self.augment_features:
             node_tensor = tf.concat([node_tensor, features], axis=-1)
@@ -326,6 +328,10 @@ class RGCN:
     def _init_session(self):
         gpu_options = tf.GPUOptions()
         gpu_options.allow_growth = True
+        if type(self.gpu_device_list) is list:
+            gpu_options.visible_device_list = ','.join([device[-1] for device in self.gpu_device_list])
+        else:
+            gpu_options.visible_device_list = self.gpu_device_list[-1]
         self.sess = tf.Session(graph=self.g, config=tf.ConfigProto(gpu_options=gpu_options))
         self.sess.run(self.init)
         self.sess.run(self.local_init)
@@ -461,7 +467,7 @@ class RGCN:
 
                 self.sess.run(self.train_op, feed_dict)
 
-            lib.plot.plot('training_time_per_iter', (time.time()-start_time)/iters_per_epoch)
+            lib.plot.plot('training_time_per_iter', (time.time() - start_time) / iters_per_epoch)
             train_cost, train_acc, train_auc = self.evaluate(train_data, train_targets, batch_size)
             lib.plot.plot('train_cost', train_cost)
             lib.plot.plot('train_acc', train_acc)

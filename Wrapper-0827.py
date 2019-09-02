@@ -73,6 +73,7 @@ def load_seq(filepath):
 
 
 def run():
+    os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(FLAGS.gpu_device)
     outfile = open(os.path.join(output_dir, str(os.getpid())) + ".out", "w")
     sys.stdout = outfile
     sys.stderr = outfile

@@ -4,6 +4,7 @@ import shutil
 import inspect
 import datetime
 import functools
+import numpy as np
 import tensorflow as tf
 from importlib import reload
 import multiprocessing as mp
@@ -13,11 +14,12 @@ from Model.Dense_RGCN import RGCN
 
 tf.logging.set_verbosity(tf.logging.FATAL)
 tf.app.flags.DEFINE_string('output_dir', '', '')
-tf.app.flags.DEFINE_integer('epochs', 200, '')
-tf.app.flags.DEFINE_integer('nb_gpus', 1, '')
+tf.app.flags.DEFINE_integer('epochs', 100, '')
+tf.app.flags.DEFINE_list('gpu_device', '0,1', '')
 tf.app.flags.DEFINE_bool('use_clr', True, '')
 tf.app.flags.DEFINE_bool('use_momentum', False, '')
 tf.app.flags.DEFINE_integer('parallel_processes', 1, '')
+tf.app.flags.DEFINE_bool('share_device', False, '')
 # some experiment settings
 tf.app.flags.DEFINE_bool('use_attention', False, '')
 tf.app.flags.DEFINE_bool('expr_simplified_attention', False, '')
@@ -42,15 +44,24 @@ if FLAGS.fold_algo == 'rnafold':
 if FLAGS.fold_algo == 'rnaplfold':
     assert (FLAGS.probabilistic is True)
 
-BATCH_SIZE = 64  # * FLAGS.nb_gpus if FLAGS.nb_gpus > 0 else 200
+BATCH_SIZE = 128  # * FLAGS.nb_gpus if FLAGS.nb_gpus > 0 else 200
 EPOCHS = FLAGS.epochs  # How many iterations to train for
-DEVICES = ['/gpu:%d' % (i) for i in range(FLAGS.nb_gpus)] if FLAGS.nb_gpus > 0 else ['/cpu:0']
+DEVICES = ['/gpu:%s' % (device) for device in FLAGS.gpu_device] if len(FLAGS.gpu_device) > 0 else ['/cpu:0']
 RBP_LIST = lib.dataloader.all_rbps
 MAX_LEN = 101
 
+if FLAGS.share_device:
+    DEVICES *= 2
+    print('Warning, sharing devices. Make sure you have enough video card memory!')
+
+if FLAGS.parallel_processes > len(DEVICES):
+    print('Warning: parallel_processes %d is larger than available devices %d. Adjusting to %d.' % \
+          (FLAGS.parallel_processes, len(DEVICES), len(DEVICES)))
+    FLAGS.parallel_processes = len(DEVICES)
+
 hp = {
     'learning_rate': 2e-4,
-    'dropout_rate': 0.2,
+    'dropout_rate': 0.5,
     'use_clr': FLAGS.use_clr,
     'use_momentum': FLAGS.use_momentum,
     'use_attention': FLAGS.use_attention,
@@ -68,17 +79,44 @@ hp = {
 
 
 def Logger(q):
-    logger = lib.logger.CSVLogger('rbp-results.csv', output_dir, ['RBP', 'acc', 'auc'])
+    import time
+    registered_gpus = {}
+    logger = lib.logger.CSVLogger('results.csv', output_dir, ['RBP', 'acc', 'auc'])
     while True:
         msg = q.get()
-        if msg == 'kill':
+        print(msg)
+        if type(msg) is str and msg == 'kill':
             logger.close()
             break
-        logger.update_with_dict(msg)
-
+        elif type(msg) is str and msg.startswith('worker'):
+            process_id = int(msg.split('_')[-1])
+            if process_id in registered_gpus:
+                print(process_id, 'found, returning', registered_gpus[process_id])
+                q.put('master_%d_'%(process_id)+registered_gpus[process_id])
+            else:
+                print(process_id, 'not found')
+                all_registered_devices = list(registered_gpus.values())
+                from collections import Counter
+                c1 = Counter(DEVICES)
+                c2 = Counter(all_registered_devices)
+                free_devices = list((c1 - c2).elements())
+                # free_devices = list(set(DEVICES).difference(set(all_registered_devices)))
+                if len(free_devices) > 0:
+                    print('free device', free_devices[0])
+                    q.put('master_%d_'%(process_id)+free_devices[0])
+                    registered_gpus[process_id] = free_devices[0]
+                else:
+                    print('no free device!')
+                    print(registered_gpus)
+                    q.put('master_%d_/cpu:0'%(process_id))
+        elif type(msg) is dict:
+            logger.update_with_dict(msg)
+        else:
+            q.put(msg)
+        time.sleep(np.random.rand()*5)
+        # print('here')
 
 def run_one_rbp(idx, q):
-    os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([device[-1] for device in DEVICES])
     rbp = RBP_LIST[idx]
     rbp_output = os.path.join(output_dir, rbp)
     os.makedirs(rbp_output)
@@ -87,6 +125,22 @@ def run_one_rbp(idx, q):
     sys.stdout = outfile
     sys.stderr = outfile
 
+    import time
+    # todo: replace _identity with pid and let logger check if pid still alive
+    process_id = mp.current_process()._identity[0]
+    print('sending process id', mp.current_process()._identity[0])
+    q.put('worker_%d' % (process_id))
+    while True:
+        msg = q.get()
+        if type(msg) is str and msg.startswith('master'):
+            print('worker %d received' % (process_id), msg, str(int(msg.split('_')[1])))
+            if int(msg.split('_')[1]) == process_id:
+                device = msg.split('_')[-1]
+                print('Process', mp.current_process(), 'received', device)
+                break
+        q.put(msg)
+        time.sleep(np.random.rand() * 2)
+
     print('training', RBP_LIST[idx])
     dataset = lib.dataloader.load_clip_seq([rbp], use_embedding=FLAGS.use_embedding, fold_algo=FLAGS.fold_algo,
                                            force_folding=FLAGS.force_folding, augment_features=FLAGS.augment_features,
@@ -94,7 +148,7 @@ def run_one_rbp(idx, q):
     if FLAGS.augment_features:
         hp['features_dim'] = dataset['train_features'].shape[-1]
     model = RGCN(MAX_LEN, dataset['VOCAB_VEC'].shape[1], len(lib.dataloader.BOND_TYPE),
-                 dataset['VOCAB_VEC'], DEVICES, **hp)
+                 dataset['VOCAB_VEC'], [device], **hp) # getting only 1 device
     # preparing data for training
     if FLAGS.probabilistic:
         train_data = [dataset['train_seq'], (dataset['train_adj_mat'], dataset['train_prob_mat'])]
