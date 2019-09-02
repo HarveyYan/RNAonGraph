@@ -6,7 +6,7 @@ import datetime
 import numpy as np
 import tensorflow as tf
 import lib.plot, lib.dataloader, lib.rgcn_utils, lib.ops.LSTM
-from Model.RGCN import RGCN
+from Model.Dense_RGCN import RGCN
 from Model.RNATracker import RNATracker
 
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.FATAL)

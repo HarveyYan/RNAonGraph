@@ -35,3 +35,22 @@ def _average_gradients(tower_grads):
         grad_and_var = (grad, v)
         average_grads.append(grad_and_var)
     return average_grads
+
+class Model(object):
+    def __init__(self, **kwargs):
+        pass
+
+    def fit(self):
+        raise NotImplementedError
+
+    def predict(self):
+        raise NotImplementedError
+
+    def evaluate(self):
+        raise NotImplementedError
+
+    def save(self):
+        raise NotImplementedError
+
+    def load(self):
+        raise NotImplementedError

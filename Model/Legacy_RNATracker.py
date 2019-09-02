@@ -32,35 +32,35 @@ class RNATracker:
         self.use_bn = kwargs.get('use_bn', False)
 
         self.g = tf.get_default_graph()
-        with self.g.as_default(), tf.device('/cpu:0'), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
-            self._placeholders()
-            if self.use_momentum:
-                self.optimizer = tf.contrib.opt.MomentumWOptimizer(
-                    1e-4, self.learning_rate * self.lr_multiplier,
-                    0.9, use_nesterov=True
-                )
-            else:
-                self.optimizer = tf.contrib.opt.AdamWOptimizer(
-                    1e-4,
-                    learning_rate=self.learning_rate * self.lr_multiplier
-                )
+        with self.g.as_default():
+            with tf.device('/cpu:0'):
+                self._placeholders()
+                if self.use_momentum:
+                    self.optimizer = tf.contrib.opt.MomentumWOptimizer(
+                        1e-4, self.learning_rate * self.lr_multiplier,
+                        0.9, use_nesterov=True
+                    )
+                else:
+                    self.optimizer = tf.contrib.opt.AdamWOptimizer(
+                        1e-4,
+                        learning_rate=self.learning_rate * self.lr_multiplier
+                    )
 
             for i, device in enumerate(self.gpu_device_list):
-                with tf.device(device), tf.name_scope('tower_%d'%(i)):
+                with tf.device(device), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
                     self._build_rnatracker(i, mode='training')
                     self._loss(i)
                     self._train(i)
 
-            with tf.name_scope('inference'):
+            with tf.device('/cpu:0'), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
                 self._build_rnatracker(None, mode='inference')
 
-            self._merge()
-            _stats('RNATracker', self.gv)
-            self.train_op = self.optimizer.apply_gradients(self.gv)
-            print(tf.trainable_variables())
-            self.saver = tf.train.Saver(max_to_keep=10)
-            self.init = tf.global_variables_initializer()
-            self.local_init = tf.local_variables_initializer()
+                self._merge()
+                _stats('RNATracker', self.gv)
+                self.train_op = self.optimizer.apply_gradients(self.gv)
+                self.saver = tf.train.Saver(max_to_keep=10)
+                self.init = tf.global_variables_initializer()
+                self.local_init = tf.local_variables_initializer()
         self._init_session()
 
     def _placeholders(self):
@@ -172,10 +172,6 @@ class RNATracker:
     def _init_session(self):
         gpu_options = tf.GPUOptions()
         gpu_options.allow_growth = True
-        if type(self.gpu_device_list) is list:
-            gpu_options.visible_device_list = ','.join([device[-1] for device in self.gpu_device_list])
-        else:
-            gpu_options.visible_device_list = self.gpu_device_list[-1]
         self.sess = tf.Session(graph=self.g, config=tf.ConfigProto(gpu_options=gpu_options))
         self.sess.run(self.init)
         self.sess.run(self.local_init)
@@ -230,11 +226,6 @@ class RNATracker:
             node_tensor = node_tensor[permute]
             y = y[permute]
 
-            # trim
-            train_rmd = node_tensor.shape[0] % len(self.gpu_device_list)
-            if train_rmd != 0:
-                node_tensor = node_tensor[:-train_rmd]
-                y = y[:-train_rmd]
             start_time = time.time()
             for i in range(iters_per_epoch):
                 _node_tensor, _labels \

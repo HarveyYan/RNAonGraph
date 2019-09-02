@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import numpy as np
 import tensorflow as tf
 from . import _average_gradients, _stats
@@ -44,10 +45,6 @@ class RGCN:
         self.use_conv = kwargs.get('use_conv', True)
         self.probabilistic = kwargs.get('probabilistic', True)
 
-        # use additional node features
-        self.augment_features = kwargs.get('augment_features', False)
-        self.features_dim = kwargs.get('features_dim', 31)
-
         self.g = tf.Graph()
         with self.g.as_default():
             with tf.device('/cpu:0'):
@@ -64,6 +61,7 @@ class RGCN:
                     )
 
             for i, device in enumerate(self.gpu_device_list):
+                # if we don't use name_scope, the operation id will automatically increment
                 with tf.device(device), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
                     if self.test_gated_nn:
                         self._build_ggnn(i, mode='training')
@@ -91,11 +89,6 @@ class RGCN:
     def _placeholders(self):
         self.node_input_ph = tf.placeholder(tf.int32, shape=[None, self.max_len])
         self.node_input_splits = tf.split(self.node_input_ph, len(self.gpu_device_list))
-
-        if self.augment_features:
-            self.features = tf.placeholder(tf.float32, shape=[None, self.max_len, self.features_dim])
-            self.features_splits = tf.split(self.features, len(self.gpu_device_list))
-            self.inference_features = tf.placeholder(tf.float32, shape=[None, self.max_len, self.features_dim])
 
         self.adj_mat_ph = tf.placeholder(tf.int32, shape=[None, self.max_len, self.max_len])
         self.adj_mat_splits = tf.split(tf.one_hot(self.adj_mat_ph, self.edge_dim), len(self.gpu_device_list))
@@ -324,7 +317,6 @@ class RGCN:
     def _init_session(self):
         gpu_options = tf.GPUOptions()
         gpu_options.allow_growth = True
-        gpu_options.visible_device_list = ','.join([device[-1] for device in self.gpu_device_list])
         self.sess = tf.Session(graph=self.g, config=tf.ConfigProto(gpu_options=gpu_options))
         self.sess.run(self.init)
         self.sess.run(self.local_init)
@@ -436,6 +428,7 @@ class RGCN:
             if self.probabilistic:
                 prob_mat = prob_mat[permute]
             y = y[permute]
+            start_time = time.time()
             for i in range(iters_per_epoch):
                 _node_tensor, _adj_mat, _labels \
                     = node_tensor[i * batch_size: (i + 1) * batch_size], \
@@ -459,6 +452,7 @@ class RGCN:
 
                 self.sess.run(self.train_op, feed_dict)
 
+            lib.plot.plot('training_time_per_iter', (time.time()-start_time)/iters_per_epoch)
             train_cost, train_acc, train_auc = self.evaluate(train_data, train_targets, batch_size)
             lib.plot.plot('train_cost', train_cost)
             lib.plot.plot('train_acc', train_acc)
@@ -561,7 +555,7 @@ class RGCN:
                 feed_tensor += [self.inference_acc_update_op, self.inference_auc_update_op]
 
             all_predicton.append(self.sess.run(feed_tensor, feed_dict)[0])
-        all_predicton = np.array(all_predicton)
+        all_predicton = np.concatenate(all_predicton, axis=0)
 
         if y is not None:
             acc, auc = self.sess.run([self.inference_acc_val, self.inference_auc_val])

@@ -6,7 +6,7 @@ import datetime
 import numpy as np
 import tensorflow as tf
 import lib.plot, lib.logger, lib.ops.LSTM, lib.rna_utils
-from Model.OldRNATracker import RNATracker
+from Model.Legacy_RNATracker import RNATracker
 
 tf.logging.set_verbosity(tf.logging.FATAL)
 tf.app.flags.DEFINE_string('output_dir', '', '')
