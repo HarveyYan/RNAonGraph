@@ -50,8 +50,8 @@ def create_df(headers, species, labels, predictions):
     :return:
     """
     df = pd.DataFrame(index=set(headers), columns=sp_list+['y'])
-    for index, item in tqdm(enumerate(predictions)):
-        df.loc[headers[index], species[index]] = item
+    for index in tqdm(range(len(predictions))):
+        df.loc[headers[index], species[index]] = predictions[index]
         if df.loc[headers[index], 'y'] is np.nan:
             df.loc[headers[index], 'y'] = labels[index]
     return df
