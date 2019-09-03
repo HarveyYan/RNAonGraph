@@ -5,6 +5,7 @@ import pickle
 import pandas as pd
 from Model.Legacy_RNATracker import RNATracker
 from tqdm import tqdm
+from multiprocessing import Pool
 
 
 BATCH_SIZE = 1000
@@ -40,6 +41,18 @@ def load_seq(fname):
 
     return headers, species, seqs, y
 
+def fill_df(values):
+    index, col, cell_value, df = values
+    df.loc[index, col] = cell_value
+    return
+
+def fill_y(values):
+    index, col, cell_value, df = values
+    if df.loc[index, col] is not None:
+        df.loc[index, col] = cell_value
+    return
+
+
 def create_df(headers, species, labels, predictions):
     """
 
@@ -50,10 +63,20 @@ def create_df(headers, species, labels, predictions):
     :return:
     """
     df = pd.DataFrame(index=set(headers), columns=sp_list+['y'])
-    for index in tqdm(range(len(predictions))):
-        df.loc[headers[index], species[index]] = predictions[index]
-        if df.loc[headers[index], 'y'] is np.nan:
-            df.loc[headers[index], 'y'] = labels[index]
+
+    values_df = [(headers[i], species[i], predictions[i], df) for i in range(len(predictions))]
+
+
+    p = Pool(16)
+    p.map(fill_df, values_df)
+
+    values_df = [(headers[i], species[i], labels[i], df) for i in range(len(labels))]
+    p.map(fill_y, values_df)
+
+    # for index in tqdm(range(len(predictions))):
+    #     df.loc[headers[index], species[index]] = predictions[index]
+    #     if df.loc[headers[index], 'y'] is np.nan:
+    #         df.loc[headers[index], 'y'] = labels[index]
     return df
 
 
