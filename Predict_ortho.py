@@ -91,7 +91,7 @@ if __name__ == '__main__':
     print ('val_seqs:', val_seqs.shape)
 
     # load test ortho
-    test_headers, test_species, test_seqs, test_y = load_seq(args.train_name)
+    test_headers, test_species, test_seqs, test_y = load_seq(args.test_name)
     test_seqs = np.array([[VOCAB.index(c) for c in seq] for seq in test_seqs])
     print ('test_seqs:', test_seqs.shape)
 
