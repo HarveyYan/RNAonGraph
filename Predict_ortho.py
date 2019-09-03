@@ -41,23 +41,16 @@ def load_seq(fname):
 
     return headers, species, seqs, y
 
-def fill_df(values):
-    index, col, cell_value, df_name = values
-    if df_name == 'validate':
-        df_validate.loc[index, col] = cell_value
-    else:
-        df_test.loc[index, col] = cell_value
-    return
 
-def fill_y(values):
-    index, col, cell_value, df_name = values
-    if df_name == 'validate':
-        if df_validate.loc[index, col] is not None:
-            df_validate.loc[index, col] = cell_value
-    else:
-        if df_test.loc[index, col] is not None:
-            df_test.loc[index, col] = cell_value
-    return
+# def fill_y(values):
+#     index, col, cell_value, df_name = values
+#     if df_name == 'validate':
+#         if df_validate.loc[index, col] is not None:
+#             df_validate.loc[index, col] = cell_value
+#     else:
+#         if df_test.loc[index, col] is not None:
+#             df_test.loc[index, col] = cell_value
+#     return
 
 
 # def create_df(headers, species, labels, predictions, df_name):
@@ -70,7 +63,19 @@ def create_df(d):
     :param predictions:
     :return:
     """
+
+    def fill_df(values):
+        k, species, label, preds = values
+        df.loc[k, species] = preds
+        df.loc[k, 'y'] = label
+
+        return
+
     df = pd.DataFrame(index=list(d.keys()), columns=sp_list+['y'])
+    filler = [(k,v['species'], v['label'], v['preds']) for k,v in d.items()]
+    p = Pool(16)
+    p.map(fill_df, filler)
+
     for k in tqdm(d.keys()):
         df.loc[k, d[k]['species']] = d[k]['preds']
         df.loc[k,'y'] = d[k]['label']
