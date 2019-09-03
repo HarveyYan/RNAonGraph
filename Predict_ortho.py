@@ -17,6 +17,10 @@ hp = {
     'use_bn': False,
 }
 
+VOCAB = ['NOT_FOUND', 'A', 'C', 'G', 'T', 'N']
+VOCAB_VEC = np.array([[0, 0, 0, 0, 0], [1, 0, 0, 0, 0], [0, 1, 0, 0, 0], [0, 0, 1, 0, 0], [0, 0, 0, 1, 0],
+                      [0, 0, 0, 0, 1]]).astype(np.float32)
+
 
 def load_seq(fname):
     '''
@@ -24,15 +28,15 @@ def load_seq(fname):
     :param fname:
     :return:
     '''
-    headers=[]; species=[];  seq=[]; y=[]
+    headers=[]; species=[];  seqs=[]; y=[]
     for line in open(fname):
         line = line.strip().split()
         headers.append(line[0])
         species.append(line[1].split('.')[0].replace('_', ''))
-        seq.append(line[2])
+        seqs.append(line[2])
         y.append(float(line[3]))
 
-    return headers, species, seq, y
+    return headers, species, seqs, y
 
 
 if __name__ == '__main__':
@@ -49,33 +53,33 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # load train ortho
-    train_headers, train_species, train_seq, train_y = load_seq(args.train_name)
+    train_headers, train_species, train_seqs, train_y = load_seq(args.train_name)
+    train_seqs = np.array([[VOCAB.index(c) for c in seq] for seq in train_seqs])
 
     # load validation ortho
-    val_headers, val_species, val_seq, val_y = load_seq(args.validation_name)
+    val_headers, val_species, val_seqs, val_y = load_seq(args.validation_name)
+    val_seqs = np.array([[VOCAB.index(c) for c in seq] for seq in val_seqs])
 
     # load test ortho
-    test_headers, test_species, test_seq, test_y = load_seq(args.train_name)
-
+    test_headers, test_species, test_seqs, test_y = load_seq(args.train_name)
+    test_seqs = np.array([[VOCAB.index(c) for c in seq] for seq in test_seqs])
 
     # load model
-    VOCAB = ['NOT_FOUND', 'A', 'C', 'G', 'T', 'N']
-    VOCAB_VEC = np.array([[0, 0, 0, 0, 0], [1, 0, 0, 0, 0], [0, 1, 0, 0, 0], [0, 0, 1, 0, 0], [0, 0, 0, 1, 0],
-                          [0, 0, 0, 0, 1]]).astype(np.float32)
+
     model = RNATracker(MAX_LEN, VOCAB_VEC.shape[1], DEVICES, **hp)
     model.load(tf.train.latest_checkpoint(args.model_weights))
 
     # predict on train ortho
-    train_preds = model.predict(train_seq, BATCH_SIZE)
+    train_preds = model.predict(train_seqs, BATCH_SIZE)
     # print ('train_preds:', train_preds.shape)
 
     # predict on validation ortho
-    val_preds = model.predict(val_seq, BATCH_SIZE)
+    val_preds = model.predict(val_seqs, BATCH_SIZE)
     print ('val_preds:', val_preds)
     print ('val_preds:', val_preds.shape)
 
     # predict on test ortho
-    test_preds = model.predict(test_seq, BATCH_SIZE)
+    test_preds = model.predict(test_seqs, BATCH_SIZE)
 
     # save predictions as df
 
