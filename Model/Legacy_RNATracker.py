@@ -52,15 +52,15 @@ class RNATracker:
                     self._loss(i)
                     self._train(i)
 
-            with tf.device('/gpu:0'), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
+            with tf.device('/cpu:0'), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
                 self._build_rnatracker(None, mode='inference')
 
-            self._merge()
-            _stats('RNATracker', self.gv)
-            self.train_op = self.optimizer.apply_gradients(self.gv)
-            self.saver = tf.train.Saver(max_to_keep=10)
-            self.init = tf.global_variables_initializer()
-            self.local_init = tf.local_variables_initializer()
+                self._merge()
+                _stats('RNATracker', self.gv)
+                self.train_op = self.optimizer.apply_gradients(self.gv)
+                self.saver = tf.train.Saver(max_to_keep=10)
+                self.init = tf.global_variables_initializer()
+                self.local_init = tf.local_variables_initializer()
         self._init_session()
 
     def _placeholders(self):
@@ -144,7 +144,7 @@ class RNATracker:
     def _merge(self):
         # output, prediction, cost, acc, pears, gv
         self.output = tf.concat(self.output, axis=0)
-        self.prediction = tf.concat(self.prediction, axis=0)
+        self.prediction = tf.nn.softmax(tf.concat(self.prediction, axis=0))
         self.cost = tf.add_n(self.cost) / len(self.gpu_device_list)
         self.gv = _average_gradients(self.gv)
 
@@ -304,20 +304,20 @@ class RNATracker:
         for i in range(iters):
             _node_tensor = node_tensor[i * batch_size:(i + 1) * batch_size]
             feed_dict = {
-                self.inference_node_ph: _node_tensor,
+                self.node_input_ph: _node_tensor,
                 self.is_training_ph: False
             }
-            feed_tensor = [self.inference_prediction]
+            feed_tensor = [self.prediction]
             if y is not None:
                 _labels = y[i * batch_size:(i + 1) * batch_size]
                 feed_dict[self.labels] = _labels
-                feed_tensor += [self.inference_acc_update_op, self.inference_auc_update_op]
+                feed_tensor += [self.acc_update_op, self.auc_update_op]
 
             all_predicton.append(self.sess.run(feed_tensor, feed_dict)[0])
         all_predicton = np.concatenate(all_predicton, axis=0)
 
         if y is not None:
-            acc, auc = self.sess.run([self.inference_acc_val, self.inference_auc_val])
+            acc, auc = self.sess.run([self.acc_val, self.auc_val])
             self.sess.run(self.local_init)
             return all_predicton, acc, auc
         else:
