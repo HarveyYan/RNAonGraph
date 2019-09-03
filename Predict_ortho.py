@@ -68,10 +68,10 @@ def create_df(headers, species, labels, predictions):
 
 
     p = Pool(16)
-    p.map(fill_df, values_df)
+    tqdm(p.map(fill_df, values_df))
 
     values_df = [(headers[i], species[i], labels[i], df) for i in range(len(labels))]
-    p.map(fill_y, values_df)
+    tqdm(p.map(fill_y, values_df))
 
     # for index in tqdm(range(len(predictions))):
     #     df.loc[headers[index], species[index]] = predictions[index]
