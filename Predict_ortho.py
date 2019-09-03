@@ -81,16 +81,16 @@ if __name__ == '__main__':
     model.load(tf.train.latest_checkpoint(args.model_weights))
 
     # predict on train ortho
-    train_preds = model.predict(train_seqs, BATCH_SIZE)
+    train_preds = model.predict(train_seqs, BATCH_SIZE)[:,1]
     # print ('train_preds:', train_preds.shape)
 
     # predict on validation ortho
-    val_preds = model.predict(val_seqs, BATCH_SIZE)
+    val_preds = model.predict(val_seqs, BATCH_SIZE)[:,1]
     print ('val_preds:', val_preds)
     print ('val_preds:', val_preds.shape)
 
     # predict on test ortho
-    test_preds = model.predict(test_seqs, BATCH_SIZE)
+    test_preds = model.predict(test_seqs, BATCH_SIZE)[:,1]
 
     # save predictions as df
     # get list of sp ids
