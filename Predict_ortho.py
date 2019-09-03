@@ -89,7 +89,7 @@ def create_df(headers, species, labels, predictions, df_name):
     #     df.loc[headers[index], species[index]] = predictions[index]
     #     if df.loc[headers[index], 'y'] is np.nan:
     #         df.loc[headers[index], 'y'] = labels[index]
-    return 
+    return
 
 
 if __name__ == '__main__':
@@ -126,6 +126,8 @@ if __name__ == '__main__':
     val_seqs = np.array([[VOCAB.index(c) for c in seq] for seq in val_seqs])
     print ('val_seqs:', val_seqs.shape)
 
+
+
     # load test ortho
     test_headers, test_species, test_seqs, test_y = load_seq(args.test_name)
     test_seqs = np.array([[VOCAB.index(c) for c in seq] for seq in test_seqs])
@@ -142,6 +144,17 @@ if __name__ == '__main__':
 
     # predict on validation ortho
     val_preds = model.predict(val_seqs, BATCH_SIZE)[:,1]
+    val_d = {}
+    for i in tqdm(range(len(val_headers))):
+        try:
+            val_d[val_headers[i]]['species'].append(val_species[i])
+            val_d[val_headers[i]]['preds'].append(val_preds[i])
+        except:
+            val_d[val_headers[i]] = {'species':[val_species[i]],
+                                     'preds':[val_preds[i]]}
+
+    exit(1)
+
     # print ('val_preds:', val_preds)
     # print ('val_preds:', val_preds.shape)
 
