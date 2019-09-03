@@ -54,7 +54,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    DEVICES = ['/gpu:'+args.gpu_card] if args.gpu is not None else ['/cpu:0']
+    DEVICES = ['/gpu:'+args.gpu_card] if args.gpu_card is not None else ['/cpu:0']
 
     # load train ortho
     train_headers, train_species, train_seqs, train_y = load_seq(args.train_name)
