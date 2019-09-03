@@ -116,6 +116,10 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    # get list of sp ids
+    info_tree = pickle.load(open(args.info_tree, 'rb'))
+    sp_list = sorted(info_tree['sp_to_id'], key=info_tree['sp_to_id'].get)
+
     DEVICES = ['/gpu:'+args.gpu_card] if args.gpu_card is not None else ['/cpu:0']
     # DEVICES = ['/xla_gpu:9']
     import os
@@ -173,9 +177,7 @@ if __name__ == '__main__':
     test_preds = model.predict(test_seqs, BATCH_SIZE)[:,1]
 
     # save predictions as df
-    # get list of sp ids
-    info_tree = pickle.load(open(args.info_tree, 'rb'))
-    sp_list = sorted(info_tree['sp_to_id'], key=info_tree['sp_to_id'].get)
+
 
     # # create pandas
     # df_train = create_df(train_headers, train_species, train_y, train_preds)
