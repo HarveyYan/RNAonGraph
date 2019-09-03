@@ -32,7 +32,7 @@ def load_seq(fname):
     :return:
     '''
     headers=[]; species=[];  seqs=[]; y=[]
-    for line in open(fname):
+    for line in tqdm(open(fname)):
         line = line.strip().split()
         headers.append(line[0])
         species.append(line[1].split('.')[0].replace('_', ''))
@@ -60,7 +60,8 @@ def fill_y(values):
     return
 
 
-def create_df(headers, species, labels, predictions, df_name):
+# def create_df(headers, species, labels, predictions, df_name):
+def create_df(d):
     """
 
     :param headers:
@@ -69,27 +70,31 @@ def create_df(headers, species, labels, predictions, df_name):
     :param predictions:
     :return:
     """
+    df = pd.DataFrame(index=list(d.keys()), columns=sp_list+['y'])
+    for k in tqdm(d.keys()):
+        df.loc[k, d[k]['species']] = d[k]['preds']
+        df.loc[k,'y'] = d['k']['label']
 
-    if df_name == 'validate':
-        values_df = [(headers[i], species[i], predictions[i], df_name) for i in range(len(predictions))]
-    else:
-        values_df = [(headers[i], species[i], predictions[i], df_name) for i in range(len(predictions))]
-
-
-    p = Pool(16)
-    tqdm(p.map(fill_df, values_df))
-
-    if df_name == 'validate':
-        values_df = [(headers[i], species[i], labels[i], df_name) for i in range(len(labels))]
-    else:
-        values_df = [(headers[i], species[i], labels[i], df_name) for i in range(len(labels))]
-    tqdm(p.map(fill_y, values_df))
+    # if df_name == 'validate':
+    #     values_df = [(headers[i], species[i], predictions[i], df_name) for i in range(len(predictions))]
+    # else:
+    #     values_df = [(headers[i], species[i], predictions[i], df_name) for i in range(len(predictions))]
+    #
+    #
+    # p = Pool(16)
+    # tqdm(p.map(fill_df, values_df))
+    #
+    # if df_name == 'validate':
+    #     values_df = [(headers[i], species[i], labels[i], df_name) for i in range(len(labels))]
+    # else:
+    #     values_df = [(headers[i], species[i], labels[i], df_name) for i in range(len(labels))]
+    # tqdm(p.map(fill_y, values_df))
 
     # for index in tqdm(range(len(predictions))):
     #     df.loc[headers[index], species[index]] = predictions[index]
     #     if df.loc[headers[index], 'y'] is np.nan:
     #         df.loc[headers[index], 'y'] = labels[index]
-    return
+    return df
 
 
 if __name__ == '__main__':
@@ -149,9 +154,15 @@ if __name__ == '__main__':
         try:
             val_d[val_headers[i]]['species'].append(val_species[i])
             val_d[val_headers[i]]['preds'].append(val_preds[i])
+            # val_d[val_headers[i]]['label'].append(val_y[i])
         except:
             val_d[val_headers[i]] = {'species':[val_species[i]],
-                                     'preds':[val_preds[i]]}
+                                     'preds':[val_preds[i]],
+                                     'label':val_y[i]}
+    df_validate = create_df(val_d)
+
+    print ('df_validate:', df_validate)
+    print ('df_validate:', df_validate.shape)
 
     exit(1)
 
