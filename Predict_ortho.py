@@ -183,6 +183,7 @@ if __name__ == '__main__':
     # df_validate = pd.DataFrame(index=list(val_d.keys()), columns=sp_list+['y'])
 
     df_validate = create_df(val_headers, val_species, val_preds)
+    print ('df_validate:', df_validate.shape)
     df_validate.loc[val_headers, 'y'] = [val_d[key]['label'] for key in val_headers ]
     # df_validate = create_df(val_d, 'validate')
 
