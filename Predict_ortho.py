@@ -77,8 +77,10 @@ if __name__ == '__main__':
 
     DEVICES = ['/gpu:'+args.gpu_card] if args.gpu_card is not None else ['/cpu:0']
     # DEVICES = ['/xla_gpu:9']
+    import os
+    os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_card
 
-    # load train ortho
+    # load train ortself.gpu_device_list[0]ho
     train_headers, train_species, train_seqs, train_y = load_seq(args.train_name)
     train_seqs = np.array([[VOCAB.index(c) for c in seq] for seq in train_seqs])
     print ('train_seqs:', train_seqs.shape)

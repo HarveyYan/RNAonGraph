@@ -47,12 +47,12 @@ class RNATracker:
                     )
 
             for i, device in enumerate(self.gpu_device_list):
-                with tf.device(device), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
+                with tf.device('/gpu:%d'%(i)), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
                     self._build_rnatracker(i, mode='training')
                     self._loss(i)
                     self._train(i)
 
-            with tf.device(self.gpu_device_list[0]), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
+            with tf.device('/gpu:0'), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
                 self._build_rnatracker(None, mode='inference')
 
                 self._merge()
@@ -172,7 +172,7 @@ class RNATracker:
     def _init_session(self):
         gpu_options = tf.GPUOptions()
         gpu_options.allow_growth = True
-        gpu_options.visible_device_list = self.gpu_device_list[0].split(':')[-1]
+        # gpu_options.visible_device_list = self.gpu_device_list[0].split(':')[-1]
         self.sess = tf.Session(graph=self.g, config=tf.ConfigProto(gpu_options=gpu_options))
         self.sess.run(self.init)
         self.sess.run(self.local_init)
