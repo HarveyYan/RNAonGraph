@@ -99,10 +99,24 @@ if __name__ == '__main__':
 
     # create pandas
     df_train = pd.DataFrame(index=set(train_headers), columns=sp_list + ['y'])
+    print ('df_train:', df_train)
 
-
-    pickle.dump(df_train, open('df_train.pkl', 'wb'))
-    print ('df_train:', df_train.shape)
+    # def create_df(headers, species, labels, predictions):
+    #     """
+    #
+    #     :param headers:
+    #     :param species:
+    #     :param labels:
+    #     :param predictions:
+    #     :return:
+    #     """
+    #     df = pd.DataFrame(index=set(headers), columns=sp_list+['y'])
+    #     for index, item in enumerate(predictions):
+    #         df.loc[headers[index], species[index]] = item
+    #
+    #
+    # pickle.dump(df_train, open('df_train.pkl', 'wb'))
+    # print ('df_train:', df_train.shape)
     # df_validate = pd.DataFrame(val_preds, columns=sp_list + ['y'])
     # pickle.dump(df_validate, open('df_validate.pkl', 'wb'))
     # print ('df_validate:', df_validate.shape)
