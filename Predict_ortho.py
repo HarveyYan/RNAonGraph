@@ -7,7 +7,6 @@ from Model.Legacy_RNATracker import RNATracker
 
 BATCH_SIZE = 128
 EPOCHS = 50
-DEVICES = ['/cpu:0']
 MAX_LEN = 101
 
 hp = {
@@ -48,10 +47,14 @@ if __name__ == '__main__':
                         help="path to ortho validation filename. Default: None")
     parser.add_argument("-test", "--test-name", default=None, type=str,
                         help="path to ortho test filename. Default: None")
+    parser.add_argument("-gpu", "--gpu-card", default=None, type=str,
+                        help="GPU Device Number. Default: None")
     parser.add_argument("--model-weights", default=None, type=str,
                         help="path to saved model weights. Default: None")
 
     args = parser.parse_args()
+
+    DEVICES = ['/gpu:'+args.gpu] if args.gpu is not None else ['/cpu:0']
 
     # load train ortho
     train_headers, train_species, train_seqs, train_y = load_seq(args.train_name)
