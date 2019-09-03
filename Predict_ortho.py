@@ -149,10 +149,12 @@ if __name__ == '__main__':
 
     df_validate = create_df(val_headers, val_species, val_y, val_preds)
     pickle.dump(df_validate, open(args.save_path+'/df_validate.pkl', 'wb'))
+    print ('df_validate:', df_validate)
     print ('df_validate:', df_validate.shape)
 
     df_test = create_df(test_headers, test_species, test_y, test_preds)
     pickle.dump(df_test, open(args.save_path+'/df_test.pkl', 'wb'))
+    print ('df_test:', df_test)
     print ('df_test:', df_test.shape)
 
 
