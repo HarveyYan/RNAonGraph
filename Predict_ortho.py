@@ -70,6 +70,8 @@ if __name__ == '__main__':
                         help="path to info tree. Default: None")
     parser.add_argument("--model-weights", default=None, type=str,
                         help="path to saved model weights. Default: None")
+    parser.add_argument("--save-path", default=None, type=str,
+                        help="path to save predictions. Default: None")
 
     args = parser.parse_args()
 
@@ -102,8 +104,8 @@ if __name__ == '__main__':
 
     # predict on validation ortho
     val_preds = model.predict(val_seqs, BATCH_SIZE)[:,1]
-    print ('val_preds:', val_preds)
-    print ('val_preds:', val_preds.shape)
+    # print ('val_preds:', val_preds)
+    # print ('val_preds:', val_preds.shape)
 
     # predict on test ortho
     test_preds = model.predict(test_seqs, BATCH_SIZE)[:,1]
@@ -115,21 +117,17 @@ if __name__ == '__main__':
 
     # create pandas
     df_train = create_df(train_headers, train_species, train_y, train_preds)
-    print ('df_train:', df_train)
+    # print ('df_train:', df_train)
     print ('df_train:', df_train.shape)
+    pickle.dump(df_train, open(args.save_path+'/df_train.pkl', 'wb'))
 
+    df_validate = pd.DataFrame(val_preds, columns=sp_list + ['y'])
+    pickle.dump(df_validate, open(args.save_path+'/df_validate.pkl', 'wb'))
+    print ('df_validate:', df_validate.shape)
 
-
-
-
-    # pickle.dump(df_train, open('df_train.pkl', 'wb'))
-    # print ('df_train:', df_train.shape)
-    # df_validate = pd.DataFrame(val_preds, columns=sp_list + ['y'])
-    # pickle.dump(df_validate, open('df_validate.pkl', 'wb'))
-    # print ('df_validate:', df_validate.shape)
-    # df_test = pd.DataFrame(test_preds, columns=sp_list + ['y'])
-    # pickle.dump(df_test, open('df_test.pkl', 'wb'))
-    # print ('df_test:', df_test.shape)
+    df_test = pd.DataFrame(test_preds, columns=sp_list + ['y'])
+    pickle.dump(df_test, open(args.save_path+'/df_test.pkl', 'wb'))
+    print ('df_test:', df_test.shape)
 
 
 
