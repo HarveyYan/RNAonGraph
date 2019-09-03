@@ -76,8 +76,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     DEVICES = ['/gpu:'+args.gpu_card] if args.gpu_card is not None else ['/cpu:0']
-    import os
-    os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_card
     # DEVICES = ['/xla_gpu:9']
 
     # load train ortho

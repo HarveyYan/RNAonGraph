@@ -172,6 +172,7 @@ class RNATracker:
     def _init_session(self):
         gpu_options = tf.GPUOptions()
         gpu_options.allow_growth = True
+        gpu_options.visible_device_list = self.gpu_device_list[0].split(':')[-1]
         self.sess = tf.Session(graph=self.g, config=tf.ConfigProto(gpu_options=gpu_options))
         self.sess.run(self.init)
         self.sess.run(self.local_init)
