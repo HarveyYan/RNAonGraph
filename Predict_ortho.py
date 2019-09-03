@@ -39,6 +39,22 @@ def load_seq(fname):
 
     return headers, species, seqs, y
 
+def create_df(headers, species, labels, predictions):
+    """
+
+    :param headers:
+    :param species:
+    :param labels:
+    :param predictions:
+    :return:
+    """
+    df = pd.DataFrame(index=set(headers), columns=sp_list+['y'])
+    for index, item in enumerate(predictions):
+        df.loc[headers[index], species[index]] = item
+        if df.loc[headers[index], 'y'] is np.nan:
+            df.loc[headers[index], 'y'] = labels[index]
+    return df
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Launch a list of commands.")
@@ -98,23 +114,14 @@ if __name__ == '__main__':
     sp_list = sorted(info_tree['sp_to_id'], key=info_tree['sp_to_id'].get)
 
     # create pandas
-    df_train = pd.DataFrame(index=set(train_headers), columns=sp_list + ['y'])
+    df_train = create_df(train_headers, train_species, train_y, train_preds)
     print ('df_train:', df_train)
+    print ('df_train:', df_train.shape)
 
-    # def create_df(headers, species, labels, predictions):
-    #     """
-    #
-    #     :param headers:
-    #     :param species:
-    #     :param labels:
-    #     :param predictions:
-    #     :return:
-    #     """
-    #     df = pd.DataFrame(index=set(headers), columns=sp_list+['y'])
-    #     for index, item in enumerate(predictions):
-    #         df.loc[headers[index], species[index]] = item
-    #
-    #
+
+
+
+
     # pickle.dump(df_train, open('df_train.pkl', 'wb'))
     # print ('df_train:', df_train.shape)
     # df_validate = pd.DataFrame(val_preds, columns=sp_list + ['y'])
