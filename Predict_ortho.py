@@ -80,10 +80,10 @@ if __name__ == '__main__':
     import os
     os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_card
 
-    # load train ortself.gpu_device_list[0]ho
-    train_headers, train_species, train_seqs, train_y = load_seq(args.train_name)
-    train_seqs = np.array([[VOCAB.index(c) for c in seq] for seq in train_seqs])
-    print ('train_seqs:', train_seqs.shape)
+    # # load train ortself.gpu_device_list[0]ho
+    # train_headers, train_species, train_seqs, train_y = load_seq(args.train_name)
+    # train_seqs = np.array([[VOCAB.index(c) for c in seq] for seq in train_seqs])
+    # print ('train_seqs:', train_seqs.shape)
 
     # load validation ortho
     val_headers, val_species, val_seqs, val_y = load_seq(args.validation_name)
@@ -100,9 +100,9 @@ if __name__ == '__main__':
     model = RNATracker(MAX_LEN, VOCAB_VEC.shape[1], DEVICES, **hp)
     model.load(tf.train.latest_checkpoint(args.model_weights))
 
-    # predict on train ortho
-    train_preds = model.predict(train_seqs, BATCH_SIZE)[:,1]
-    # print ('train_preds:', train_preds.shape)
+    # # predict on train ortho
+    # train_preds = model.predict(train_seqs, BATCH_SIZE)[:,1]
+    # # print ('train_preds:', train_preds.shape)
 
     # predict on validation ortho
     val_preds = model.predict(val_seqs, BATCH_SIZE)[:,1]
@@ -117,11 +117,11 @@ if __name__ == '__main__':
     info_tree = pickle.load(open(args.info_tree, 'rb'))
     sp_list = sorted(info_tree['sp_to_id'], key=info_tree['sp_to_id'].get)
 
-    # create pandas
-    df_train = create_df(train_headers, train_species, train_y, train_preds)
-    # print ('df_train:', df_train)
-    print ('df_train:', df_train.shape)
-    pickle.dump(df_train, open(args.save_path+'/df_train.pkl', 'wb'))
+    # # create pandas
+    # df_train = create_df(train_headers, train_species, train_y, train_preds)
+    # # print ('df_train:', df_train)
+    # print ('df_train:', df_train.shape)
+    # pickle.dump(df_train, open(args.save_path+'/df_train.pkl', 'wb'))
 
     df_validate = create_df(val_headers, val_species, val_y, val_preds)
     pickle.dump(df_validate, open(args.save_path+'/df_validate.pkl', 'wb'))
