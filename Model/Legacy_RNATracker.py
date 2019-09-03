@@ -52,15 +52,15 @@ class RNATracker:
                     self._loss(i)
                     self._train(i)
 
-            with tf.device('/cpu:0'), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
+            with tf.device('/gpu:0'), tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
                 self._build_rnatracker(None, mode='inference')
 
-                self._merge()
-                _stats('RNATracker', self.gv)
-                self.train_op = self.optimizer.apply_gradients(self.gv)
-                self.saver = tf.train.Saver(max_to_keep=10)
-                self.init = tf.global_variables_initializer()
-                self.local_init = tf.local_variables_initializer()
+            self._merge()
+            _stats('RNATracker', self.gv)
+            self.train_op = self.optimizer.apply_gradients(self.gv)
+            self.saver = tf.train.Saver(max_to_keep=10)
+            self.init = tf.global_variables_initializer()
+            self.local_init = tf.local_variables_initializer()
         self._init_session()
 
     def _placeholders(self):
