@@ -72,13 +72,13 @@ def create_df(d):
         return
 
     df = pd.DataFrame(index=list(d.keys()), columns=sp_list+['y'])
-    filler = [(k,v['species'], v['label'], v['preds']) for k,v in d.items()]
+    filler = tqdm([(k,v['species'], v['label'], v['preds']) for k,v in d.items()])
     p = Pool(16)
-    p.map(fill_df, filler)
+    tqdm(p.map(fill_df, filler))
 
-    for k in tqdm(d.keys()):
-        df.loc[k, d[k]['species']] = d[k]['preds']
-        df.loc[k,'y'] = d[k]['label']
+    # for k in tqdm(d.keys()):
+    #     df.loc[k, d[k]['species']] = d[k]['preds']
+    #     df.loc[k,'y'] = d[k]['label']
 
     # if df_name == 'validate':
     #     values_df = [(headers[i], species[i], predictions[i], df_name) for i in range(len(predictions))]
