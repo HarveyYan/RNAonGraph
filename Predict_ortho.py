@@ -54,7 +54,19 @@ def load_seq(fname):
 
 
 # def create_df(headers, species, labels, predictions, df_name):
-def create_df(d):
+
+def fill_df(values):
+    k, species, label, preds, df_name = values
+    if df_name == 'validate':
+        df_validate.loc[k, species] = preds
+        df_validate.loc[k, 'y'] = label
+    else:
+        df_test.loc[k, species] = preds
+        df_test.loc[k, 'y'] = label
+
+    return
+
+def create_df(d, df_name):
     """
 
     :param headers:
@@ -64,15 +76,8 @@ def create_df(d):
     :return:
     """
 
-    def fill_df(values):
-        k, species, label, preds = values
-        df.loc[k, species] = preds
-        df.loc[k, 'y'] = label
 
-        return
-
-    df = pd.DataFrame(index=list(d.keys()), columns=sp_list+['y'])
-    filler = [(k,v['species'], v['label'], v['preds']) for k,v in d.items()]
+    filler = [(k,v['species'], v['label'], v['preds'], df_name) for k,v in d.items()]
     p = Pool(16)
     tqdm(p.map(fill_df, filler))
 
@@ -99,7 +104,7 @@ def create_df(d):
     #     df.loc[headers[index], species[index]] = predictions[index]
     #     if df.loc[headers[index], 'y'] is np.nan:
     #         df.loc[headers[index], 'y'] = labels[index]
-    return df
+    return
 
 
 if __name__ == '__main__':
@@ -168,7 +173,10 @@ if __name__ == '__main__':
             val_d[val_headers[i]] = {'species':[val_species[i]],
                                      'preds':[val_preds[i]],
                                      'label':val_y[i]}
-    df_validate = create_df(val_d)
+
+    df_validate = pd.DataFrame(index=list(val_d.keys()), columns=sp_list+['y'])
+
+    create_df(val_d, 'validate')
 
     print ('df_validate:', df_validate)
     print ('df_validate:', df_validate.shape)
