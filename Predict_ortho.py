@@ -1,13 +1,14 @@
 import argparse
 import numpy as np
 import tensorflow as tf
+import pickle
 from Model.Legacy_RNATracker import RNATracker
 
 
 BATCH_SIZE = 128
 EPOCHS = 50
 DEVICES = ['/cpu:0']
-MAX_LEN = 100
+MAX_LEN = 101
 
 hp = {
     'learning_rate': 2e-4,
@@ -66,7 +67,7 @@ if __name__ == '__main__':
     test_headers, test_species, test_seqs, test_y = load_seq(args.train_name)
     test_seqs = np.array([[VOCAB.index(c) for c in seq] for seq in test_seqs])
     print ('test_seqs:', test_seqs.shape)
-    
+
     # load model
 
     model = RNATracker(MAX_LEN, VOCAB_VEC.shape[1], DEVICES, **hp)
