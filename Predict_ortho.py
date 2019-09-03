@@ -2,6 +2,7 @@ import argparse
 import numpy as np
 import tensorflow as tf
 import pickle
+import pandas as pd
 from Model.Legacy_RNATracker import RNATracker
 
 
@@ -49,12 +50,15 @@ if __name__ == '__main__':
                         help="path to ortho test filename. Default: None")
     parser.add_argument("-gpu", "--gpu-card", default=None, type=str,
                         help="GPU Device Number. Default: None")
+    parser.add_argument("--info-tree", default=None, type=str,
+                        help="path to info tree. Default: None")
     parser.add_argument("--model-weights", default=None, type=str,
                         help="path to saved model weights. Default: None")
 
     args = parser.parse_args()
 
-    DEVICES = ['/gpu:'+args.gpu_card] if args.gpu_card is not None else ['/cpu:0']
+    # DEVICES = ['/gpu:'+args.gpu_card] if args.gpu_card is not None else ['/cpu:0']
+    DEVICES = ['/gpu:9']
 
     # load train ortho
     train_headers, train_species, train_seqs, train_y = load_seq(args.train_name)
@@ -89,6 +93,20 @@ if __name__ == '__main__':
     test_preds = model.predict(test_seqs, BATCH_SIZE)
 
     # save predictions as df
+    # get list of sp ids
+    info_tree = pickle.load(open(args.info_tree, 'rb'))
+    sp_list = sorted(info_tree['sp_to_id'], key=info_tree['sp_to_id'].get)
+
+    # create pandas
+    df_train = pd.DataFrame(train_preds, columns=sp_list + ['y'])
+    pickle.dump(df_train, open('df_train.pkl', 'wb'))
+    print ('df_train:', df_train.shape)
+    df_validate = pd.DataFrame(val_preds, columns=sp_list + ['y'])
+    pickle.dump(df_validate, open('df_validate.pkl', 'wb'))
+    print ('df_validate:', df_validate.shape)
+    df_test = pd.DataFrame(test_preds, columns=sp_list + ['y'])
+    pickle.dump(df_test, open('df_test.pkl', 'wb'))
+    print ('df_test:', df_test.shape)
 
 
 
