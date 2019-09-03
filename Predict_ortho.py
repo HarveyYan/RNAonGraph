@@ -169,55 +169,57 @@ if __name__ == '__main__':
 
     # predict on validation ortho
     val_preds = model.predict(val_seqs, BATCH_SIZE)[:,1]
-    val_d = {}
-    for i in tqdm(range(len(val_headers))):
-        try:
-            val_d[val_headers[i]]['species'].append(val_species[i])
-            val_d[val_headers[i]]['preds'].append(val_preds[i])
-            # val_d[val_headers[i]]['label'].append(val_y[i])
-        except:
-            val_d[val_headers[i]] = {'species':[val_species[i]],
-                                     'preds':[val_preds[i]],
-                                     'label':val_y[i]}
-
-    # df_validate = pd.DataFrame(index=list(val_d.keys()), columns=sp_list+['y'])
-
-    df_validate = create_df(val_headers, val_species, val_preds)
-    print ('df_validate:', df_validate.shape)
-    df_validate.loc[val_headers, 'y'] = [val_d[key]['label'] for key in val_headers ]
-    # df_validate = create_df(val_d, 'validate')
-
-    print ('df_validate:', df_validate)
-    print ('df_validate:', df_validate.shape)
-
-    exit(1)
+    np.savetxt(args.save_path+'/pred_val.txt', val_preds)
+    # val_d = {}
+    # for i in tqdm(range(len(val_headers))):
+    #     try:
+    #         val_d[val_headers[i]]['species'].append(val_species[i])
+    #         val_d[val_headers[i]]['preds'].append(val_preds[i])
+    #         # val_d[val_headers[i]]['label'].append(val_y[i])
+    #     except:
+    #         val_d[val_headers[i]] = {'species':[val_species[i]],
+    #                                  'preds':[val_preds[i]],
+    #                                  'label':val_y[i]}
+    #
+    # # df_validate = pd.DataFrame(index=list(val_d.keys()), columns=sp_list+['y'])
+    #
+    # df_validate = create_df(val_headers, val_species, val_preds)
+    # print ('df_validate:', df_validate.shape)
+    # df_validate.loc[val_headers, 'y'] = [val_d[key]['label'] for key in val_headers ]
+    # # df_validate = create_df(val_d, 'validate')
+    #
+    # print ('df_validate:', df_validate)
+    # print ('df_validate:', df_validate.shape)
+    #
+    # exit(1)
 
     # print ('val_preds:', val_preds)
     # print ('val_preds:', val_preds.shape)
 
     # predict on test ortho
     test_preds = model.predict(test_seqs, BATCH_SIZE)[:,1]
+    np.savetxt(args.save_path+'/pred_test.txt', test_preds)
 
-    # save predictions as df
-
-
-    # # create pandas
-    # df_train = create_df(train_headers, train_species, train_y, train_preds)
-    # # print ('df_train:', df_train)
-    # print ('df_train:', df_train.shape)
-    # pickle.dump(df_train, open(args.save_path+'/df_train.pkl', 'wb'))
-
-    # df_validate = pd.DataFrame(index=set(val_headers), columns=sp_list+['y'])
-    create_df(val_headers, val_species, val_y, val_preds, 'validate')
-    pickle.dump(df_validate, open(args.save_path+'/df_validate.pkl', 'wb'))
-    print ('df_validate:', df_validate)
-    print ('df_validate:', df_validate.shape)
-
-    df_test = pd.DataFrame(index=set(test_headers), columns=sp_list+['y'])
-    create_df(test_headers, test_species, test_y, test_preds, 'test')
-    pickle.dump(df_test, open(args.save_path+'/df_test.pkl', 'wb'))
-    print ('df_test:', df_test)
-    print ('df_test:', df_test.shape)
+    # # save predictions as df
+    #
+    #
+    # # # create pandas
+    # # df_train = create_df(train_headers, train_species, train_y, train_preds)
+    # # # print ('df_train:', df_train)
+    # # print ('df_train:', df_train.shape)
+    # # pickle.dump(df_train, open(args.save_path+'/df_train.pkl', 'wb'))
+    #
+    # # df_validate = pd.DataFrame(index=set(val_headers), columns=sp_list+['y'])
+    # create_df(val_headers, val_species, val_y, val_preds, 'validate')
+    # pickle.dump(df_validate, open(args.save_path+'/df_validate.pkl', 'wb'))
+    # print ('df_validate:', df_validate)
+    # print ('df_validate:', df_validate.shape)
+    #
+    # df_test = pd.DataFrame(index=set(test_headers), columns=sp_list+['y'])
+    # create_df(test_headers, test_species, test_y, test_preds, 'test')
+    # pickle.dump(df_test, open(args.save_path+'/df_test.pkl', 'wb'))
+    # print ('df_test:', df_test)
+    # print ('df_test:', df_test.shape)
 
 
 
