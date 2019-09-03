@@ -4,6 +4,7 @@ import tensorflow as tf
 import pickle
 import pandas as pd
 from Model.Legacy_RNATracker import RNATracker
+from tqdm import tqdm
 
 
 BATCH_SIZE = 1000
@@ -49,7 +50,7 @@ def create_df(headers, species, labels, predictions):
     :return:
     """
     df = pd.DataFrame(index=set(headers), columns=sp_list+['y'])
-    for index, item in enumerate(predictions):
+    for index, item in tqdm(enumerate(predictions)):
         df.loc[headers[index], species[index]] = item
         if df.loc[headers[index], 'y'] is np.nan:
             df.loc[headers[index], 'y'] = labels[index]

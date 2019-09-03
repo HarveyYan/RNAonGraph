@@ -4,6 +4,7 @@ import time
 import numpy as np
 import tensorflow as tf
 from . import _average_gradients, _stats
+from tqdm import tqdm
 
 basedir = os.path.split(os.path.dirname(os.path.abspath(__file__)))[0]
 sys.path.append(basedir)
@@ -301,7 +302,6 @@ class RNATracker:
         node_tensor = X
         all_predicton = []
         iters = len(node_tensor) // batch_size + (0 if len(node_tensor) % batch_size == 0 else 1)
-        from tqdm import tqdm
         for i in tqdm(range(iters)):
             _node_tensor = node_tensor[i * batch_size:(i + 1) * batch_size]
             feed_dict = {
