@@ -144,7 +144,7 @@ class RNATracker:
     def _merge(self):
         # output, prediction, cost, acc, pears, gv
         self.output = tf.concat(self.output, axis=0)
-        self.prediction = tf.nn.softmax(tf.concat(self.prediction, axis=0))
+        self.prediction = tf.concat(self.prediction, axis=0)
         self.cost = tf.add_n(self.cost) / len(self.gpu_device_list)
         self.gv = _average_gradients(self.gv)
 
