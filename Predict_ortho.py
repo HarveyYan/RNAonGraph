@@ -6,7 +6,7 @@ import pandas as pd
 from Model.Legacy_RNATracker import RNATracker
 
 
-BATCH_SIZE = 128
+BATCH_SIZE = 1000
 EPOCHS = 50
 MAX_LEN = 101
 
