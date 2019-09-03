@@ -67,15 +67,18 @@ if __name__ == '__main__':
 
     # predict on train ortho
     train_preds = model.predict(train_seq, BATCH_SIZE)
+    # print ('train_preds:', train_preds.shape)
 
     # predict on validation ortho
     val_preds = model.predict(val_seq, BATCH_SIZE)
+    print ('val_preds:', val_preds)
+    print ('val_preds:', val_preds.shape)
 
     # predict on test ortho
     test_preds = model.predict(test_seq, BATCH_SIZE)
 
     # save predictions as df
-    
+
 
 
 
