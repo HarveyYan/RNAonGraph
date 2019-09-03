@@ -72,7 +72,7 @@ def create_df(d):
         return
 
     df = pd.DataFrame(index=list(d.keys()), columns=sp_list+['y'])
-    filler = tqdm([(k,v['species'], v['label'], v['preds']) for k,v in d.items()])
+    filler = [(k,v['species'], v['label'], v['preds']) for k,v in d.items()]
     p = Pool(16)
     tqdm(p.map(fill_df, filler))
 
