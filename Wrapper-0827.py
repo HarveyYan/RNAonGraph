@@ -22,7 +22,7 @@ tf.app.flags.DEFINE_bool('predict_orthologous', False,
                          'Otherwise, a train, valid and test set path must be each '
                          'provided to train the model from scratch.')
 tf.app.flags.DEFINE_string('weight_params_path',
-                           'output/RNATracker/20190705-141134-set2set-t10-128/1_PARCLIP_AGO1234_hg19/checkpoints/-20',
+                           'output/RNATracker/20190705-141134-set2set-t10-128/1_PARCLIP_AGO1234_hg19/checkpoints',
                            '')
 tf.app.flags.DEFINE_string('ortho_fasta_path', '', '')
 # if training the model from scratch
@@ -33,6 +33,7 @@ tf.app.flags.DEFINE_string('test_fasta_path', '', '')
 FLAGS = tf.app.flags.FLAGS
 
 if FLAGS.predict_orthologous:
+    assert (os.path.exists(FLAGS.weight_params_path))
     assert (os.path.exists(FLAGS.ortho_fasta_path))
 else:
     assert (os.path.exists(FLAGS.train_fasta_path))
@@ -90,7 +91,7 @@ def run():
         assert(seqs.shape[1]==MAX_LEN)
         model = RNATracker(MAX_LEN, VOCAB_VEC.shape[1], DEVICES, **hp)
 
-        model.load(FLAGS.weight_params_path)
+        model.load(tf.train.latest_checkpoint(FLAGS.weight_params_path))
         all_preds = model.predict(seqs, BATCH_SIZE)
         with open(os.path.join(output_dir, 'prediction.fa'), 'w') as output_file:
             for header, pred in zip(all_header, all_preds):
