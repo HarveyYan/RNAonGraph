@@ -6,7 +6,7 @@ from Model.Legacy_RNATracker import RNATracker
 
 BATCH_SIZE = 128
 EPOCHS = 50
-DEVICES = ['/gpu:0']
+DEVICES = ['/cpu:0']
 MAX_LEN = 100
 
 hp = {
