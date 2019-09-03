@@ -42,18 +42,25 @@ def load_seq(fname):
     return headers, species, seqs, y
 
 def fill_df(values):
-    index, col, cell_value, df = values
-    df.loc[index, col] = cell_value
+    index, col, cell_value, df_name = values
+    if df_name == 'validate':
+        df_validate.loc[index, col] = cell_value
+    else:
+        df_test.loc[index, col] = cell_value
     return
 
 def fill_y(values):
-    index, col, cell_value, df = values
-    if df.loc[index, col] is not None:
-        df.loc[index, col] = cell_value
+    index, col, cell_value, df_name = values
+    if df_name == 'validate':
+        if df_validate.loc[index, col] is not None:
+            df_validate.loc[index, col] = cell_value
+    else:
+        if df_test.loc[index, col] is not None:
+            df_test.loc[index, col] = cell_value
     return
 
 
-def create_df(headers, species, labels, predictions):
+def create_df(headers, species, labels, predictions, df_name):
     """
 
     :param headers:
@@ -62,22 +69,27 @@ def create_df(headers, species, labels, predictions):
     :param predictions:
     :return:
     """
-    df = pd.DataFrame(index=set(headers), columns=sp_list+['y'])
 
-    values_df = [(headers[i], species[i], predictions[i], df) for i in range(len(predictions))]
+    if df_name == 'validate':
+        values_df = [(headers[i], species[i], predictions[i], df_name) for i in range(len(predictions))]
+    else:
+        values_df = [(headers[i], species[i], predictions[i], df_name) for i in range(len(predictions))]
 
 
     p = Pool(16)
     tqdm(p.map(fill_df, values_df))
 
-    values_df = [(headers[i], species[i], labels[i], df) for i in range(len(labels))]
+    if df_name == 'validate':
+        values_df = [(headers[i], species[i], labels[i], df_name) for i in range(len(labels))]
+    else:
+        values_df = [(headers[i], species[i], labels[i], df_name) for i in range(len(labels))]
     tqdm(p.map(fill_y, values_df))
 
     # for index in tqdm(range(len(predictions))):
     #     df.loc[headers[index], species[index]] = predictions[index]
     #     if df.loc[headers[index], 'y'] is np.nan:
     #         df.loc[headers[index], 'y'] = labels[index]
-    return df
+    return 
 
 
 if __name__ == '__main__':
@@ -147,12 +159,14 @@ if __name__ == '__main__':
     # print ('df_train:', df_train.shape)
     # pickle.dump(df_train, open(args.save_path+'/df_train.pkl', 'wb'))
 
-    df_validate = create_df(val_headers, val_species, val_y, val_preds)
+    df_validate = pd.DataFrame(index=set(val_headers), columns=sp_list+['y'])
+    create_df(val_headers, val_species, val_y, val_preds, 'validate')
     pickle.dump(df_validate, open(args.save_path+'/df_validate.pkl', 'wb'))
     print ('df_validate:', df_validate)
     print ('df_validate:', df_validate.shape)
 
-    df_test = create_df(test_headers, test_species, test_y, test_preds)
+    df_test = pd.DataFrame(index=set(test_headers), columns=sp_list+['y'])
+    create_df(test_headers, test_species, test_y, test_preds, 'test')
     pickle.dump(df_test, open(args.save_path+'/df_test.pkl', 'wb'))
     print ('df_test:', df_test)
     print ('df_test:', df_test.shape)
