@@ -33,6 +33,9 @@ if __name__ == '__main__':
     # load train ortho
     train_headers, train_species, train_seq, train_y = load_seq(args.train_name)
 
+    print ('train_headers:', train_headers[:10], 'train_species:', train_species[:10],
+           'train_seq:', train_seq[:10], 'train_y:', train_y[:10])
+
     # load validation ortho
     val_headers, val_species, val_seq, val_y = load_seq(args.validation_name)
 
