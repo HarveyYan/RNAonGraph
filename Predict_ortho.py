@@ -55,15 +55,18 @@ if __name__ == '__main__':
     # load train ortho
     train_headers, train_species, train_seqs, train_y = load_seq(args.train_name)
     train_seqs = np.array([[VOCAB.index(c) for c in seq] for seq in train_seqs])
+    print ('train_seqs:', train_seqs.shape)
 
     # load validation ortho
     val_headers, val_species, val_seqs, val_y = load_seq(args.validation_name)
     val_seqs = np.array([[VOCAB.index(c) for c in seq] for seq in val_seqs])
+    print ('val_seqs:', val_seqs.shape)
 
     # load test ortho
     test_headers, test_species, test_seqs, test_y = load_seq(args.train_name)
     test_seqs = np.array([[VOCAB.index(c) for c in seq] for seq in test_seqs])
-
+    print ('test_seqs:', test_seqs.shape)
+    
     # load model
 
     model = RNATracker(MAX_LEN, VOCAB_VEC.shape[1], DEVICES, **hp)
