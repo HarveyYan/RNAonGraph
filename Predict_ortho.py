@@ -66,7 +66,8 @@ def fill_df(values):
 
     return
 
-def create_df(d, df_name):
+# def create_df(d, df_name):
+def create_df(headers, species, predictions):
     """
 
     :param headers:
@@ -76,35 +77,40 @@ def create_df(d, df_name):
     :return:
     """
 
+    df = pd.DataFrame(index=headers, columns=sp_list+['y'])
 
-    filler = [(k,v['species'], v['label'], v['preds'], df_name) for k,v in d.items()]
-    p = Pool(16)
-    tqdm(p.map(fill_df, filler))
 
+    # df_validate = pd.DataFrame(index=list(val_d.keys()), columns=sp_list+['y'])
+
+    # filler = [(k,v['species'], v['label'], v['preds'], df_name) for k,v in d.items()]
+    # p = Pool(16)
+    # tqdm(p.map(fill_df, filler))
+    #
     # for k in tqdm(d.keys()):
     #     df.loc[k, d[k]['species']] = d[k]['preds']
     #     df.loc[k,'y'] = d[k]['label']
+    #
+    # # if df_name == 'validate':
+    # #     values_df = [(headers[i], species[i], predictions[i], df_name) for i in range(len(predictions))]
+    # # else:
+    # #     values_df = [(headers[i], species[i], predictions[i], df_name) for i in range(len(predictions))]
+    # #
+    # #
+    # # p = Pool(16)
+    # # tqdm(p.map(fill_df, values_df))
+    # #
+    # # if df_name == 'validate':
+    # #     values_df = [(headers[i], species[i], labels[i], df_name) for i in range(len(labels))]
+    # # else:
+    # #     values_df = [(headers[i], species[i], labels[i], df_name) for i in range(len(labels))]
+    # # tqdm(p.map(fill_y, values_df))
 
-    # if df_name == 'validate':
-    #     values_df = [(headers[i], species[i], predictions[i], df_name) for i in range(len(predictions))]
-    # else:
-    #     values_df = [(headers[i], species[i], predictions[i], df_name) for i in range(len(predictions))]
-    #
-    #
-    # p = Pool(16)
-    # tqdm(p.map(fill_df, values_df))
-    #
-    # if df_name == 'validate':
-    #     values_df = [(headers[i], species[i], labels[i], df_name) for i in range(len(labels))]
-    # else:
-    #     values_df = [(headers[i], species[i], labels[i], df_name) for i in range(len(labels))]
-    # tqdm(p.map(fill_y, values_df))
+    for index in tqdm(range(len(predictions))):
+        df.loc[headers[index], species[index]] = predictions[index]
+        # if df.loc[headers[index], 'y'] is np.nan:
+        #     df.loc[headers[index], 'y'] = labels[index]
 
-    # for index in tqdm(range(len(predictions))):
-    #     df.loc[headers[index], species[index]] = predictions[index]
-    #     if df.loc[headers[index], 'y'] is np.nan:
-    #         df.loc[headers[index], 'y'] = labels[index]
-    return
+    return df
 
 
 if __name__ == '__main__':
@@ -174,9 +180,10 @@ if __name__ == '__main__':
                                      'preds':[val_preds[i]],
                                      'label':val_y[i]}
 
-    df_validate = pd.DataFrame(index=list(val_d.keys()), columns=sp_list+['y'])
+    # df_validate = pd.DataFrame(index=list(val_d.keys()), columns=sp_list+['y'])
 
-    create_df(val_d, 'validate')
+    df_validate = create_df(val_headers, val_species, val_preds)
+    # df_validate = create_df(val_d, 'validate')
 
     print ('df_validate:', df_validate)
     print ('df_validate:', df_validate.shape)
@@ -198,7 +205,7 @@ if __name__ == '__main__':
     # print ('df_train:', df_train.shape)
     # pickle.dump(df_train, open(args.save_path+'/df_train.pkl', 'wb'))
 
-    df_validate = pd.DataFrame(index=set(val_headers), columns=sp_list+['y'])
+    # df_validate = pd.DataFrame(index=set(val_headers), columns=sp_list+['y'])
     create_df(val_headers, val_species, val_y, val_preds, 'validate')
     pickle.dump(df_validate, open(args.save_path+'/df_validate.pkl', 'wb'))
     print ('df_validate:', df_validate)
