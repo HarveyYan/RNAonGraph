@@ -98,15 +98,17 @@ if __name__ == '__main__':
     sp_list = sorted(info_tree['sp_to_id'], key=info_tree['sp_to_id'].get)
 
     # create pandas
-    df_train = pd.DataFrame(train_preds, columns=sp_list + ['y'])
+    df_train = pd.DataFrame(index=set(train_headers), columns=sp_list + ['y'])
+
+
     pickle.dump(df_train, open('df_train.pkl', 'wb'))
     print ('df_train:', df_train.shape)
-    df_validate = pd.DataFrame(val_preds, columns=sp_list + ['y'])
-    pickle.dump(df_validate, open('df_validate.pkl', 'wb'))
-    print ('df_validate:', df_validate.shape)
-    df_test = pd.DataFrame(test_preds, columns=sp_list + ['y'])
-    pickle.dump(df_test, open('df_test.pkl', 'wb'))
-    print ('df_test:', df_test.shape)
+    # df_validate = pd.DataFrame(val_preds, columns=sp_list + ['y'])
+    # pickle.dump(df_validate, open('df_validate.pkl', 'wb'))
+    # print ('df_validate:', df_validate.shape)
+    # df_test = pd.DataFrame(test_preds, columns=sp_list + ['y'])
+    # pickle.dump(df_test, open('df_test.pkl', 'wb'))
+    # print ('df_test:', df_test.shape)
 
 
 
