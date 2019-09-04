@@ -194,6 +194,7 @@ if __name__ == "__main__":
         lib.graphprot_dataloader.load_clip_seq([TRAIN_RBP_ID], use_embedding=FLAGS.use_embedding,
                                                fold_algo=FLAGS.fold_algo, force_folding=FLAGS.force_folding,
                                                probabilistic=FLAGS.probabilistic)[0]  # load one at a time
+    np.save(os.path.join(output_dir, 'splits.npy'), dataset['splits'])
     manager = mp.Manager()
     q = manager.Queue()
     pool = Pool(FLAGS.parallel_processes + 1)

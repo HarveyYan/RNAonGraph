@@ -88,8 +88,7 @@ def split_matrices_by_relation(sparse_matrices, pool):
     '''
     merge sparse submatrices, and split into 4 matrices by relation
     '''
-    from tqdm import tqdm
-    ret = np.array(list(tqdm(pool.imap(split_matrix_by_relation, sparse_matrices))))
+    ret = np.array(list(pool.imap(split_matrix_by_relation, sparse_matrices)))
     return ret[:, 0], ret[:, 1], ret[:, 2]
 
 
@@ -230,14 +229,7 @@ def pretrain_word2vec(seqs, kmer_len, window, embedding_size, save_path):
 
 
 if __name__ == "__main__":
-    from scipy.sparse import csr_matrix
-
-    row = np.array([0, 1, 1, 2, 0, 2])
-    col = np.array([1, 2, 0, 1, 2, 0])
-    data = np.array([1, 1, 2, 2, 3, 4])
-    test_mat = csr_matrix((data, (row, col)), shape=(3, 3))
-    print(test_mat.toarray())
-    all_data, all_row_col, segment_size = split_matrices_triu([test_mat] * 2, mp.Pool(2))
-    print(all_data.shape)
-    print(all_row_col[0])
-    print(segment_size.shape)
+    for i, rbp in enumerate(all_rbps):
+        if i < 6:
+            continue
+        load_clip_seq([rbp], fold_algo='rnaplfold', probabilistic=True)
