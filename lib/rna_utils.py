@@ -92,25 +92,29 @@ Boltzmann sampling using RNAsubopt
 '''
 
 
-def sample_one_seq(seq):
+def sample_one_seq(seq, passes=10):
     max_len = len(seq)
-    adj_mat = np.zeros((max_len, max_len), dtype=np.int32)
+    adj_mat_tmp = np.zeros((max_len, max_len), dtype=np.int32)
     for i in range(max_len):
         if i != max_len - 1:
-            adj_mat[i, i + 1] = 1
+            adj_mat_tmp[i, i + 1] = 1
         if i != 0:
-            adj_mat[i, i - 1] = 2
-    cmd = 'echo "%s" | RNAsubopt --stochBT=%d' % (seq, 1)
-    struct = subprocess.check_output(cmd, shell=True). \
-                 decode('utf-8').rstrip().split('\n')[1:][0]
-    bg = fgb.BulgeGraph.from_dotbracket(struct)
-    for i, ele in enumerate(struct):
-        if ele == '(':
-            adj_mat[i, bg.pairing_partner(i + 1) - 1] = 3
-        elif ele == ')':
-            adj_mat[i, bg.pairing_partner(i + 1) - 1] = 4
-
-    return adj_mat
+            adj_mat_tmp[i, i - 1] = 2
+    cmd = 'echo "%s" | RNAsubopt --stochBT=%d' % (seq, passes)
+    all_struct = subprocess.check_output(cmd, shell=True). \
+                 decode('utf-8').rstrip().split('\n')[1:]
+    all_adj_mat = []
+    for struct in all_struct:
+        adj_mat = adj_mat_tmp.copy()
+        bg = fgb.BulgeGraph.from_dotbracket(struct)
+        for i, ele in enumerate(struct):
+            if ele == '(':
+                adj_mat[i, bg.pairing_partner(i + 1) - 1] = 3
+            elif ele == ')':
+                adj_mat[i, bg.pairing_partner(i + 1) - 1] = 4
+        all_adj_mat.append(adj_mat)
+    all_adj_mat = np.stack(all_adj_mat, axis=0)
+    return all_adj_mat
 
 
 def fold_seq_subopt(seq, probabilistic=False, sampling_amount=1000):

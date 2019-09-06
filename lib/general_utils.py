@@ -62,34 +62,15 @@ def compare_two_csvs(path_to_csv_1, path_to_csv_2, experiment, axis_name_1, axis
     plt.legend([pos, neg, neu], ['%s is better:%d' % (axis_name_1, len(idx_pos)),
                                  '%s is better:%d' % (axis_name_2, len(idx_neg)), 'draw:%d' % (len(idx_neu))],
                scatterpoints=1, loc='lower left')
-
+    plt.tight_layout()
     if not os.path.exists('../Graph'):
         os.mkdir('../Graph')
     plt.savefig('../Graph/%s.png' % (experiment), dpi=300)
 
 
 if __name__ == "__main__":
-    # compare_two_csvs(
-    #     '../output/RNATracker/20190813-000624-smaller-arch-clip-seq-5000-augment-features/rbp-results.csv',
-    #     '../output/ideep-clipseq-5000.csv',
-    #     'RNATracker-vs-ideep-clipseq-5000', 'RNATracker', 'ideep', roundto=3)
-
-    # compare_two_csvs(
-    #     '../output/RGCN/20190807-195408-ggnn-attention-32-20-vanilla-attention/rbp-results.csv',
-    #     '../output/ideeps.csv',
-    #     '(a)gated-rgcn-vs-ideeps', '(a)gated-rgcn', 'ideeps')
-
-    # compare_two_csvs(
-    #     '../output/RGCN/20190807-195731-ggnn-attention-32-20-simplified-lstm/rbp-results.csv',
-    #     '../output/RGCN/20190807-195408-ggnn-attention-32-20-vanilla-attention/rbp-results.csv',
-    #     '(sa)gated-rgcn-vs-(a)gated-rgcn', '(sa)gated-rgcn', '(a)gated-rgcn')
-
-    # compare_two_csvs(
-    #     '../output/RNATracker/20190705-141134-set2set-t10-128/rbp-results.csv',
-    #     '../output/RGCN/20190815-211234-32-80-lstm-clipseq-30000-rgcn/rbp-results.csv',
-    #     'RNATracker-vs-MFE-rgcn', 'RNATracker', 'MFE-rgcn')
 
     compare_two_csvs(
         '../output/RNATracker/20190705-141134-set2set-t10-128/rbp-results.csv',
-        '../output/RGCN/20190820-171941-boltzmann-sampling-rgcn/rbp-results.csv',
-        'conv-set2set-vs-boltzmann-rgcn', 'conv-set2set', 'boltzmann-rgcn')
+        '../output/RGCN10folds/rnaplfold-b128-e60/rnaplfold-results.csv',
+        'Conv&Set2Set-vs-GNN (RNAplfold)', 'Conv&Set2Set', 'GNN (RNAplfold)')

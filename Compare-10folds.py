@@ -5,7 +5,7 @@ from lib.logger import CSVLogger
 from lib.general_utils import compare_two_csvs
 
 def summarize_10fold_results(path, outfile_name):
-    logger = CSVLogger(outfile_name, path, ['rbp', 'acc', 'acc_std', 'auc', 'auc_std'])
+    logger = CSVLogger(outfile_name, path, ['RBP', 'acc', 'acc_std', 'auc', 'auc_std'])
     for rbp_dir in os.listdir(path):
         if os.path.isdir(os.path.join(path, rbp_dir)):
             rbp_name = rbp_dir.split('rgcn')[-1][1:]
@@ -15,7 +15,7 @@ def summarize_10fold_results(path, outfile_name):
                 if len(acc) != 10:
                     print(rbp_name)
                 logger.update_with_dict({
-                    'rbp': rbp_name,
+                    'RBP': rbp_name,
                     'acc': np.round(np.mean(acc), 3),
                     'acc_std': np.round(np.std(acc), 3),
                     'auc': np.round(np.mean(auc), 3),

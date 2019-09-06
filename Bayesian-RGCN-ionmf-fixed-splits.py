@@ -64,9 +64,9 @@ def run_one_rbp(idx, q):
     rbp_output = os.path.join(output_dir, rbp)
     os.makedirs(rbp_output)
 
-    outfile = open(os.path.join(rbp_output, str(os.getpid())) + ".out", "w")
-    sys.stdout = outfile
-    sys.stderr = outfile
+    # outfile = open(os.path.join(rbp_output, str(os.getpid())) + ".out", "w")
+    # sys.stdout = outfile
+    # sys.stderr = outfile
 
     print('training', RBP_LIST[idx])
     dataset = lib.dataloader.load_clip_seq([rbp], use_embedding=FLAGS.use_embedding, fold_algo='rnafold')[
@@ -76,18 +76,25 @@ def run_one_rbp(idx, q):
                  dataset['VOCAB_VEC'], DEVICES, **hp)
     train_data = [dataset['train_seq'], dataset['train_adj_mat']]
 
-    # pretraining phase
-    pretrain_dir = os.path.join(rbp_output, 'pretrain')
-    os.makedirs(pretrain_dir)
-    model.pretrain(train_data, dataset['train_label'], EPOCHS, BATCH_SIZE, pretrain_dir, logging=True)
+    load_weights = True
+    if load_weights:
+        weight_path = 'output/RGCN/20190903-204843-MCD0.5/%s/pretrain/checkpoints' % (rbp)
+        model.load(tf.train.latest_checkpoint(weight_path))
+    else:
+        # pretraining phase
+        pretrain_dir = os.path.join(rbp_output, 'pretrain')
+        os.makedirs(pretrain_dir)
+        model.pretrain(train_data, dataset['train_label'], EPOCHS, BATCH_SIZE, pretrain_dir, logging=True)
     reload(lib.plot)
     reload(lib.logger)
 
     # start stochastic training
-    pool = Pool(8)
-    model.train_sampled_structures(dataset['train_seq'], dataset['train_labels'], EPOCHS, BATCH_SIZE, output_dir, pool)
+    pool = Pool(30)
+    model.train_sampled_structures(dataset['train_seq'], dataset['train_label'], 10,
+                                   BATCH_SIZE, output_dir, pool, 10, 10)
     averaged_preds, averaged_std, auc, acc = \
-        model.evaluate_stochastic(dataset['test_seq'], dataset['test_labels'], BATCH_SIZE, pool)
+        model.evaluate_stochastic(dataset['test_seq'], dataset['test_label'],
+                                  BATCH_SIZE * 10, pool, 10, 10)
     np.save('averaged_preds.npy', averaged_preds)
     np.save('averaged_std.npy', averaged_std)
     pool.close()
@@ -124,6 +131,9 @@ if __name__ == "__main__":
     shutil.copy(inspect.getfile(RGCN), backup_dir)
     shutil.copy(inspect.getfile(lib.ops.LSTM), backup_dir)
     shutil.copy(inspect.getfile(lib.dataloader), backup_dir)
+
+    run_one_rbp(0, None)
+    exit()
 
     manager = mp.Manager()
     q = manager.Queue()

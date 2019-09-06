@@ -4,6 +4,7 @@ import time
 import numpy as np
 from tqdm import tqdm
 import tensorflow as tf
+from functools import partial
 from sklearn.metrics import roc_auc_score
 from . import _average_gradients, _stats
 
@@ -351,21 +352,24 @@ class RGCN:
         print('Begin stochastic training')
         for epoch in range(epochs):
             print('stochastic training, epoch: %d' % (epoch))
-            all_graphs = []
-            for graph_iter in tqdm(range(graph_passes)):  # epochs * graph_passes
 
-                adj_mat = np.stack(list(pool.imap(lib.rna_utils.sample_one_seq, seqs)), axis=0)
+            print('sampling graphs')
+            sample_one_seq = partial(lib.rna_utils.sample_one_seq, passes=graph_passes)
+            all_adj_mat = np.stack(list(tqdm(pool.imap(sample_one_seq, seqs))), axis=1)
+
+            for graph_iter in tqdm(range(graph_passes)):  # epochs * graph_passes
+                adj_mat = all_adj_mat[graph_iter]
 
                 permute = np.random.permutation(size_train)
-                node_tensor = node_tensor[permute]
-                adj_mat = adj_mat[permute]
-                y = y[permute]
+                shuffled_node_tensor = node_tensor[permute]
+                shuffled_adj_mat = adj_mat[permute]
+                shuffled_y = y[permute]
 
                 for i in range(iters_per_epoch):
                     _node_tensor, _adj_mat, _labels \
-                        = node_tensor[i * batch_size: (i + 1) * batch_size], \
-                          adj_mat[i * batch_size: (i + 1) * batch_size], \
-                          y[i * batch_size: (i + 1) * batch_size]
+                        = shuffled_node_tensor[i * batch_size: (i + 1) * batch_size], \
+                          shuffled_adj_mat[i * batch_size: (i + 1) * batch_size], \
+                          shuffled_y[i * batch_size: (i + 1) * batch_size]
                     feed_dict = {
                         self.node_input_ph: _node_tensor,
                         self.adj_mat_ph: _adj_mat,
@@ -376,11 +380,12 @@ class RGCN:
                     }
                     self.sess.run(self.train_op, feed_dict)
 
-                all_graphs.append(adj_mat)
             # at the end of each epoch, evaluate
-            averaged_preds, averaged_std, auc, acc = self.evaluate_stochastic(node_tensor, y, batch_size, pool,
-                                                                              graph_passes, forward_passes,
-                                                                              adj_mat_list=all_graphs)
+            averaged_preds, averaged_std, auc, acc = \
+                self.evaluate_stochastic(node_tensor, y,
+                                         batch_size * 5 * len(self.gpu_device_list),
+                                         pool, graph_passes, forward_passes,
+                                         adj_mat_list=all_adj_mat)
             logger.update_with_dict({
                 'epoch': epoch,
                 'auc': auc,
@@ -390,19 +395,19 @@ class RGCN:
 
     def evaluate_stochastic(self, node_tensor, y, batch_size, pool, graph_passes, forward_passes, adj_mat_list=None):
         seqs = [''.join(['PACGTN'[c] for c in seq]) for seq in node_tensor]
+        if adj_mat_list is None:
+            sample_one_seq = partial(lib.rna_utils.sample_one_seq, passes=graph_passes)
+            adj_mat_list = np.stack(list(pool.imap(sample_one_seq, seqs)), axis=0)
         all_preds_mean, all_preds_std = [], []
         for i in range(graph_passes):
-            if adj_mat_list is None:
-                adj_mat = np.stack(list(pool.imap(lib.rna_utils.sample_one_seq, seqs)), axis=0)
-            else:
-                adj_mat = adj_mat_list[i]
+            adj_mat = adj_mat_list[i]
             preds_mean, preds_std = self.MC_dropout((node_tensor, adj_mat), batch_size, forward_passes)
             all_preds_mean.append(preds_mean)
             all_preds_std.append(preds_std)
-        averaged_preds = np.sum(all_preds_mean) / graph_passes
-        averaged_std = np.sum(all_preds_std) / graph_passes
+        averaged_preds = np.stack(all_preds_mean, -1).mean(-1)
+        averaged_std = np.stack(all_preds_std, -1).mean(-1)
         auc = roc_auc_score(y, averaged_preds[:, 1])
-        acc = np.sum(averaged_preds.argmax(axis=-1) == y) / len(y)
+        acc = np.mean(averaged_preds.argmax(axis=-1) == y)
         return averaged_preds, averaged_std, auc, acc
 
     def MC_dropout(self, X, batch_size, T=100):
