@@ -70,7 +70,17 @@ def compare_two_csvs(path_to_csv_1, path_to_csv_2, experiment, axis_name_1, axis
 
 if __name__ == "__main__":
 
+    # compare_two_csvs(
+    #     '../output/RNATracker10folds/rnatracker-results.csv',
+    #     '../output/RGCN10folds/rnaplfold-b128-e60/rnaplfold-results.csv',
+    #     'New Conv&Set2Set-vs-GNN (RNAplfold)', 'Conv&Set2Set', 'GNN (RNAplfold)')
+
     compare_two_csvs(
         '../output/RNATracker/20190705-141134-set2set-t10-128/rbp-results.csv',
-        '../output/RGCN10folds/rnaplfold-b128-e60/rnaplfold-results.csv',
+        '../output/RGCN/20190820-171941-boltzmann-sampling-rgcn/rbp-results.csv',
         'Conv&Set2Set-vs-GNN (RNAplfold)', 'Conv&Set2Set', 'GNN (RNAplfold)')
+
+    compare_two_csvs(
+        '../output/ideeps.csv',
+        '../output/RGCN/20190820-171941-boltzmann-sampling-rgcn/rbp-results.csv',
+        'iDeeps-vs-GNN (RNAplfold)', 'iDeeps', 'GNN (RNAplfold)')

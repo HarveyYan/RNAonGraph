@@ -148,7 +148,9 @@ def run_one_rbp(idx, q):
 
     train_data = [dataset['seq'][train_idx], dataset['all_data'][train_idx],
                   dataset['all_row_col'][train_idx], dataset['segment_size'][train_idx]]
-    model.fit(train_data, dataset['label'][train_idx], EPOCHS, BATCH_SIZE, fold_output, logging=True)
+    model.fit(train_data, dataset['label'][train_idx], EPOCHS*3//4, BATCH_SIZE, fold_output, logging=True)
+    # randomize train-val split
+    model.fit(train_data, dataset['label'][train_idx], EPOCHS, BATCH_SIZE, fold_output, logging=True, epoch_to_start=EPOCHS*3//4+1)
 
     test_data = [dataset['seq'][test_idx], dataset['all_data'][test_idx],
                  dataset['all_row_col'][test_idx], dataset['segment_size'][test_idx]]

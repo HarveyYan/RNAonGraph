@@ -8,12 +8,16 @@ def summarize_10fold_results(path, outfile_name):
     logger = CSVLogger(outfile_name, path, ['RBP', 'acc', 'acc_std', 'auc', 'auc_std'])
     for rbp_dir in os.listdir(path):
         if os.path.isdir(os.path.join(path, rbp_dir)):
-            rbp_name = rbp_dir.split('rgcn')[-1][1:]
+            rbp_name = rbp_dir.split('-')[-1]
             if os.path.exists(os.path.join(path, rbp_dir, 'results.csv')):
-                file = pd.read_csv(os.path.join(path, rbp_dir, 'results.csv'))
+                try:
+                    file = pd.read_csv(os.path.join(path, rbp_dir, 'results.csv'))
+                except pd.errors.EmptyDataError:
+                    print(rbp_name, 'has lagged behind considerably')
+                    continue
                 acc, auc = list(file['acc']), list(file['auc'])
                 if len(acc) != 10:
-                    print(rbp_name)
+                    print(rbp_name, 'hasn\'t yet reached 10 folds')
                 logger.update_with_dict({
                     'RBP': rbp_name,
                     'acc': np.round(np.mean(acc), 3),
@@ -26,6 +30,6 @@ def summarize_10fold_results(path, outfile_name):
     logger.close()
 
 if __name__ == "__main__":
-    summarize_10fold_results('output/RGCN10folds/rnasubopt-60epochs', 'rnasubopt-results.csv')
+    summarize_10fold_results('output/SMRGCN-Graphprot', 'rnaplfold-results.csv')
 
 

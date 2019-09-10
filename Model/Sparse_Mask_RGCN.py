@@ -13,6 +13,7 @@ from Model import _stats
 from lib.rgcn_utils import sparse_graph_convolution_layers, normalize
 import lib.plot, lib.logger, lib.clr
 import lib.ops.LSTM, lib.ops.Linear, lib.ops.Conv1D
+from lib.AMSGrad import AMSGrad
 
 
 class SparseMaskRGCN:
@@ -51,10 +52,12 @@ class SparseMaskRGCN:
                     0.9, use_nesterov=True
                 )
             else:
-                self.optimizer = tf.contrib.opt.AdamWOptimizer(
-                    1e-4,
-                    learning_rate=self.learning_rate * self.lr_multiplier
-                )
+                self.optimizer = AMSGrad(
+                    self.learning_rate * self.lr_multiplier, beta2=0.999)
+                # self.optimizer = tf.contrib.opt.AdamWOptimizer(
+                #     1e-4,
+                #     learning_rate=self.learning_rate * self.lr_multiplier
+                # )
 
             with tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
                 self._build_ggnn()
@@ -81,9 +84,13 @@ class SparseMaskRGCN:
         self.global_step = tf.placeholder(tf.int32, ())
         self.hf_iters_per_epoch = tf.placeholder(tf.int32, ())
         if self.use_clr:
-            self.lr_multiplier = lib.clr.cyclic_learning_rate(self.global_step, 0.5, 5.,
-                                                              self.hf_iters_per_epoch, mode='exp_range')
+            self.lr_multiplier = lib.clr. \
+                cyclic_learning_rate(self.global_step, 0.5, 5.,
+                                     self.hf_iters_per_epoch, mode='exp_range')
         else:
+            # self.lr_multiplier = tf.train. \
+            #     exponential_decay(1., self.global_step, self.hf_iters_per_epoch * 2,
+            #                       0.97, staircase=True)
             self.lr_multiplier = 1.
 
     def _build_ggnn(self):
@@ -262,7 +269,7 @@ class SparseMaskRGCN:
             # trick, transpose
             all_tensors.append(
                 tf.compat.v1.SparseTensorValue(
-                    np.concatenate(all_row_col)[:, [1,0]],
+                    np.concatenate(all_row_col)[:, [1, 0]],
                     np.concatenate(all_data),
                     (size, size)
                 )
@@ -275,9 +282,10 @@ class SparseMaskRGCN:
     def indexing_iterable(cls, iterable, idx):
         return [item[idx] for item in iterable]
 
-    def fit(self, X, y, epochs, batch_size, output_dir, logging=False):
+    def fit(self, X, y, epochs, batch_size, output_dir, logging=False, epoch_to_start=0):
         checkpoints_dir = os.path.join(output_dir, 'checkpoints/')
-        os.makedirs(checkpoints_dir)
+        if not os.path.exists(checkpoints_dir):
+            os.makedirs(checkpoints_dir)
 
         # split validation set
         if self.return_label:
@@ -310,7 +318,7 @@ class SparseMaskRGCN:
         #     map(map_func=dataset_map_function).shuffle(size_train).batch(batch_size).prefetch(buffer_size=5)
         # train_iterator = train_dataset.make_initializable_iterator()
 
-        for epoch in range(epochs):
+        for epoch in range(epoch_to_start, epochs):
 
             permute = np.random.permutation(size_train)
             node_tensor, all_rel_data, all_row_col, segment_length = self.indexing_iterable(X, permute)
@@ -334,7 +342,7 @@ class SparseMaskRGCN:
                     self.labels: _labels,
                     self.max_len: max(_segment),
                     self.segment_length: _segment,
-                    self.global_step: i,
+                    self.global_step: i + epoch * iters_per_epoch,
                     self.hf_iters_per_epoch: iters_per_epoch // 2,
                     self.is_training_ph: True
                 }
@@ -342,7 +350,7 @@ class SparseMaskRGCN:
                 prepro_time += (prepro_end - prepro_start)
                 self.sess.run(self.train_op, feed_dict)
                 training_time += (time.time() - prepro_end)
-            print('preprocessing time: %.4f, training time: %.4f'%(prepro_time/(i+1), training_time/(i+1)))
+            print('preprocessing time: %.4f, training time: %.4f' % (prepro_time / (i + 1), training_time / (i + 1)))
             train_cost, train_acc, train_auc = self.evaluate(X, train_targets, batch_size)
             lib.plot.plot('train_cost', train_cost)
             lib.plot.plot('train_acc', train_acc)
@@ -399,8 +407,6 @@ class SparseMaskRGCN:
                 self.labels: _labels,
                 self.max_len: max(_segment),
                 self.segment_length: _segment,
-                self.global_step: i,
-                self.hf_iters_per_epoch: iters_per_epoch // 2,
                 self.is_training_ph: False
             }
 

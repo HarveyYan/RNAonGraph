@@ -4,7 +4,7 @@ import csv
 class CSVLogger:
 
     def __init__(self, name, path, fieldnames):
-        self.log_file = open(os.path.join(path, name), 'w', newline='')
+        self.log_file = open(os.path.join(path, name), 'a', newline='')
         self.writer = csv.DictWriter(self.log_file, fieldnames, restval= ',')
         self.writer.writeheader()
 

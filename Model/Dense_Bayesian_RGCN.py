@@ -336,18 +336,41 @@ class RGCN:
     def train_sampled_structures(self, node_tensor, y, epochs, batch_size, output_dir, pool, graph_passes=10,
                                  forward_passes=100):
 
+        # split validation set
+        if self.return_label:
+            pos_idx, neg_idx = np.where(y == 1)[0], np.where(y == 0)[0]
+        else:
+            pos_idx, neg_idx = np.where(np.count_nonzero(y, axis=-1) > 0)[0], \
+                               np.where(np.count_nonzero(y, axis=-1) == 0)[0]
+
+        dev_idx = np.array(list(np.random.choice(pos_idx, int(len(pos_idx) * 0.1), False)) + \
+                           list(np.random.choice(neg_idx, int(len(neg_idx) * 0.1), False)))
+        train_idx = np.delete(np.arange(len(y)), dev_idx)
+
+        dev_node_tensor = node_tensor[dev_idx]
+        dev_targets = y[dev_idx]
+        node_tensor = node_tensor[train_idx]
+        y = y[train_idx]
+        np.save('dev_targets.npy', dev_targets)
+
         train_rmd = node_tensor.shape[0] % len(self.gpu_device_list)
         if train_rmd != 0:
             node_tensor = node_tensor[:-train_rmd]
             y = y[:-train_rmd]
 
+        dev_rmd = dev_node_tensor.shape[0] % len(self.gpu_device_list)
+        if dev_rmd != 0:
+            dev_node_tensor = dev_node_tensor[:-dev_rmd]
+            dev_targets = dev_targets[:-train_rmd]
+
         seqs = [''.join(['PACGTN'[c] for c in seq]) for seq in node_tensor]
+        dev_seqs = [''.join(['PACGTN'[c] for c in seq]) for seq in dev_node_tensor]
 
         size_train = node_tensor.shape[0]
         iters_per_epoch = size_train // batch_size + (0 if size_train % batch_size == 0 else 1)
         lib.plot.set_output_dir(output_dir)
 
-        logger = lib.logger.CSVLogger('run.csv', output_dir, ['epoch', 'acc', 'auc'])
+        logger = lib.logger.CSVLogger('run.csv', output_dir, ['epoch', 'train_acc', 'train_auc', 'dev_acc', 'dev_auc'])
 
         print('Begin stochastic training')
         for epoch in range(epochs):
@@ -355,10 +378,11 @@ class RGCN:
 
             print('sampling graphs')
             sample_one_seq = partial(lib.rna_utils.sample_one_seq, passes=graph_passes)
-            all_adj_mat = np.stack(list(tqdm(pool.imap(sample_one_seq, seqs))), axis=1)
+            all_train_adj_mat = np.stack(list(tqdm(pool.imap(sample_one_seq, seqs))), axis=1)
+            all_dev_adj_mat = np.stack(list(tqdm(pool.imap(sample_one_seq, dev_seqs))), axis=1)
 
             for graph_iter in tqdm(range(graph_passes)):  # epochs * graph_passes
-                adj_mat = all_adj_mat[graph_iter]
+                adj_mat = all_train_adj_mat[graph_iter]
 
                 permute = np.random.permutation(size_train)
                 shuffled_node_tensor = node_tensor[permute]
@@ -381,15 +405,24 @@ class RGCN:
                     self.sess.run(self.train_op, feed_dict)
 
             # at the end of each epoch, evaluate
-            averaged_preds, averaged_std, auc, acc = \
+            _, _, train_auc, train_acc = \
                 self.evaluate_stochastic(node_tensor, y,
                                          batch_size * 5 * len(self.gpu_device_list),
                                          pool, graph_passes, forward_passes,
-                                         adj_mat_list=all_adj_mat)
+                                         adj_mat_list=all_train_adj_mat)
+            dev_preds_mean, dev_preds_variance, dev_auc, dev_acc = \
+                self.evaluate_stochastic(dev_node_tensor, dev_targets,
+                                         batch_size * 5 * len(self.gpu_device_list),
+                                         pool, graph_passes, forward_passes,
+                                         adj_mat_list=all_dev_adj_mat)
+            np.save('dev_preds_mean_%d.npy' % (epoch), dev_preds_mean)
+            np.save('dev_preds_variance_%d.npy' % (epoch), dev_preds_variance)
             logger.update_with_dict({
                 'epoch': epoch,
-                'auc': auc,
-                'acc': acc,
+                'train_auc': train_auc,
+                'train_acc': train_acc,
+                'dev_auc': dev_auc,
+                'dev_acc': dev_acc,
             })
         logger.close()
 
@@ -398,17 +431,17 @@ class RGCN:
         if adj_mat_list is None:
             sample_one_seq = partial(lib.rna_utils.sample_one_seq, passes=graph_passes)
             adj_mat_list = np.stack(list(pool.imap(sample_one_seq, seqs)), axis=0)
-        all_preds_mean, all_preds_std = [], []
+        all_preds_mean, all_preds_sq_mean = [], []
         for i in range(graph_passes):
             adj_mat = adj_mat_list[i]
-            preds_mean, preds_std = self.MC_dropout((node_tensor, adj_mat), batch_size, forward_passes)
+            preds_mean, preds_sq_mean = self.MC_dropout((node_tensor, adj_mat), batch_size, forward_passes)
             all_preds_mean.append(preds_mean)
-            all_preds_std.append(preds_std)
+            all_preds_sq_mean.append(preds_sq_mean)
         averaged_preds = np.stack(all_preds_mean, -1).mean(-1)
-        averaged_std = np.stack(all_preds_std, -1).mean(-1)
+        averaged_variance = np.stack(all_preds_sq_mean, -1).mean(-1) - averaged_preds ** 2
         auc = roc_auc_score(y, averaged_preds[:, 1])
         acc = np.mean(averaged_preds.argmax(axis=-1) == y)
-        return averaged_preds, averaged_std, auc, acc
+        return averaged_preds, averaged_variance, auc, acc
 
     def MC_dropout(self, X, batch_size, T=100):
         print('Monte Carlo dropout')
@@ -430,7 +463,7 @@ class RGCN:
             preds_all_passes.append(np.concatenate(all_preds, axis=0))
         # all passes w.r.t one graph
         preds_all_passes = np.stack(preds_all_passes, axis=-1)
-        return np.mean(preds_all_passes, axis=-1), np.std(preds_all_passes, axis=-1)
+        return np.mean(preds_all_passes, axis=-1), np.mean(preds_all_passes ** 2, axis=-1)
 
     def delete(self):
         tf.reset_default_graph()
