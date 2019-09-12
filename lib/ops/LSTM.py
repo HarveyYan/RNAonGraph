@@ -183,7 +183,7 @@ def set2set_attention(name, encoder_outputs, cell_output, mask_offset=None):
         if mask_offset is not None:
             bias_mat = tf.sequence_mask(mask_offset, maxlen=tf.shape(scores)[1], dtype=tf.float32) * -1e9
             scores += bias_mat
-        attention_weights = tf.nn.softmax(scores, axis=-1)
+        attention_weights = tf.nn.softmax(scores, axis=-1, name='att_weights')
         context_vector = tf.reduce_sum(encoder_outputs * attention_weights[:, :, None], axis=1)
         return tf.concat([context_vector, cell_output], axis=-1)
 

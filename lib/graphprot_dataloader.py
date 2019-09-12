@@ -124,6 +124,7 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
     probabilistic = kwargs.get('probabilistic', False)
     load_mat = kwargs.get('load_mat', True)
     force_folding = kwargs.get('force_folding', False)
+    nucleotide_label = kwargs.get('nucleotide_label', False)
 
     clip_data = []
 
@@ -135,7 +136,6 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
         neg_id, neg_seq = lib.rna_utils.load_seq(path_template.format(rbp, 'train', 'negatives'))
         all_id = pos_id + neg_id
         all_seq = pos_seq + neg_seq
-        permute = np.random.permutation(len(all_id))
 
         if load_mat:
             # load sparse matrices
@@ -149,11 +149,11 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
                 # we can do this simply because the secondary structure is not a multigraph
                 pos_adjacency_matrix, pos_probability_matrix = pos_matrix
                 neg_adjacency_matrix, neg_probability_matrix = neg_matrix
-                adjacency_matrix = np.concatenate([pos_probability_matrix, neg_probability_matrix], axis=0)[permute]
+                adjacency_matrix = np.concatenate([pos_probability_matrix, neg_probability_matrix], axis=0)
             else:
                 pos_adjacency_matrix = pos_matrix
                 neg_adjacency_matrix = neg_matrix
-                adjacency_matrix = np.concatenate([pos_adjacency_matrix, neg_adjacency_matrix], axis=0)[permute]
+                adjacency_matrix = np.concatenate([pos_adjacency_matrix, neg_adjacency_matrix], axis=0)
                 adjacency_matrix = np.array([(rmat > 0).astype(np.float32) for rmat in adjacency_matrix])
 
             # first step, split them sparse csr matrices by relations
@@ -163,7 +163,19 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
             dataset['all_row_col'] = all_row_col
             dataset['segment_size'] = segment_size
 
-        dataset['label'] = np.array([1] * len(pos_id) + [0] * (len(neg_id)))[permute]
+        if nucleotide_label:
+            size_pos = len(pos_id)
+            # nucleotide level label
+            all_label = []
+            for i, seq in enumerate(all_seq):
+                if i < size_pos:
+                    all_label.append((np.array(list(seq)) <= 'Z').astype(np.int32))
+                else:
+                    all_label.append(np.array([0]*len(seq)))
+            dataset['label'] = np.array(all_label)
+        else:
+            dataset['label'] = np.array([1] * len(pos_id) + [0] * (len(neg_id)))
+
 
         all_seq = [seq.upper().replace('U', 'T') for seq in all_seq]
 
@@ -180,12 +192,16 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
             VOCAB = ['NOT_FOUND'] + list(word2vec_model.wv.vocab.keys())
             VOCAB_VEC = np.concatenate([np.zeros((1, emb_size)).astype(np.float32), word2vec_model.wv.vectors], axis=0)
             kmers = get_kmers(all_seq, kmer_len)
-            dataset['seq'] = np.array([[VOCAB.index(c) for c in seq] for seq in kmers])[permute]
+            dataset['seq'] = np.array([[VOCAB.index(c) for c in seq] for seq in kmers])
         else:
             VOCAB = ['NOT_FOUND', 'A', 'C', 'G', 'T']
             VOCAB_VEC = np.array([[0, 0, 0, 0], [1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]).astype(
                 np.float32)
-            dataset['seq'] = np.array([[VOCAB.index(c) for c in seq] for seq in all_seq])[permute]
+            dataset['seq'] = np.array([[VOCAB.index(c) for c in seq] for seq in all_seq])
+
+        # to ensure segment_size is always included
+        if 'segment_size' not in dataset:
+            dataset['segment_size'] = np.array([len(seq) for seq in dataset['seq']])
 
         # only using nucleotide information
         dataset['VOCAB'] = VOCAB
