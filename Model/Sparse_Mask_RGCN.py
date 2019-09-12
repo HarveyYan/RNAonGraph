@@ -79,7 +79,7 @@ class SparseMaskRGCN:
         if self.return_label:
             self.labels = tf.placeholder(tf.int32, shape=[None, ])  # binary
         else:
-            self.labels = tf.placeholder(tf.int32, shape=[None, None, ]) # nucleotide level label
+            self.labels = tf.placeholder(tf.int32, shape=[None, None, ])  # nucleotide level label
         self.max_len = tf.placeholder(tf.int32, shape=())
         self.segment_length = tf.placeholder(tf.int32, shape=[None, ])
 
@@ -147,7 +147,7 @@ class SparseMaskRGCN:
 
         if self.return_label:
             output = tf.concat([hidden_tensor, node_tensor], axis=-1)
-            input_dim = self.units*2
+            input_dim = self.units * 2
         else:
             output = hidden_tensor
             input_dim = self.units
@@ -310,8 +310,8 @@ class SparseMaskRGCN:
         if self.return_label:
             pos_idx, neg_idx = np.where(y == 1)[0], np.where(y == 0)[0]
         else:
-            pos_idx, neg_idx = np.where(np.count_nonzero(y, axis=-1) > 0)[0], \
-                               np.where(np.count_nonzero(y, axis=-1) == 0)[0]
+            row_sum = np.array(list(map(lambda label: np.sum(label), y)))
+            pos_idx, neg_idx = np.where(row_sum > 0)[0], np.where(row_sum == 0)[0]
 
         dev_idx = np.array(list(np.random.choice(pos_idx, int(len(pos_idx) * 0.1), False)) + \
                            list(np.random.choice(neg_idx, int(len(neg_idx) * 0.1), False)))
@@ -355,7 +355,7 @@ class SparseMaskRGCN:
 
                 _max_len = max(_segment)
                 if not self.return_label:
-                    _labels = np.array([np.pad(label, [0, _max_len - len(label)]) for label in _labels])
+                    _labels = np.array([np.pad(label, [0, _max_len - len(label)], mode='constant') for label in _labels])
                 all_adj_mat = self._merge_sparse_submatrices(_rel_data, _row_col, _segment)
 
                 feed_dict = {
@@ -423,7 +423,7 @@ class SparseMaskRGCN:
 
             _max_len = max(_segment)
             if not self.return_label:
-                _labels = np.array([np.pad(label, [0, _max_len - len(label)]) for label in _labels])
+                _labels = np.array([np.pad(label, [0, _max_len - len(label)], mode='constant') for label in _labels])
             all_adj_mat = self._merge_sparse_submatrices(_rel_data, _row_col, _segment)
 
             feed_dict = {
