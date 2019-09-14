@@ -118,31 +118,31 @@ def run_one_rbp(idx, q):
     fold_output = os.path.join(output_dir, 'fold%d' % (idx))
     os.makedirs(fold_output)
 
-    # outfile = open(os.path.join(fold_output, str(os.getpid())) + ".out", "w")
-    # sys.stdout = outfile
-    # sys.stderr = outfile
-    #
-    # import time
-    # # todo: replace _identity with pid and let logger check if pid still alive
-    # process_id = mp.current_process()._identity[0]
-    # print('sending process id', mp.current_process()._identity[0])
-    # q.put('worker_%d' % (process_id))
-    # while True:
-    #     msg = q.get()
-    #     if type(msg) is str and msg.startswith('master'):
-    #         print('worker %d received' % (process_id), msg, str(int(msg.split('_')[1])))
-    #         if int(msg.split('_')[1]) == process_id:
-    #             device = msg.split('_')[-1]
-    #             print('Process', mp.current_process(), 'received', device)
-    #             break
-    #     q.put(msg)
-    #     time.sleep(np.random.rand() * 2)
+    outfile = open(os.path.join(fold_output, str(os.getpid())) + ".out", "w")
+    sys.stdout = outfile
+    sys.stderr = outfile
+
+    import time
+    # todo: replace _identity with pid and let logger check if pid still alive
+    process_id = mp.current_process()._identity[0]
+    print('sending process id', mp.current_process()._identity[0])
+    q.put('worker_%d' % (process_id))
+    while True:
+        msg = q.get()
+        if type(msg) is str and msg.startswith('master'):
+            print('worker %d received' % (process_id), msg, str(int(msg.split('_')[1])))
+            if int(msg.split('_')[1]) == process_id:
+                device = msg.split('_')[-1]
+                print('Process', mp.current_process(), 'received', device)
+                break
+        q.put(msg)
+        time.sleep(np.random.rand() * 2)
 
     print('training fold', idx)
     train_idx, test_idx = dataset['splits'][idx]
     model = JSMRGCN(dataset['VOCAB_VEC'].shape[1], len(lib.graphprot_dataloader.BOND_TYPE) - 1,
                     # excluding no bond
-                    dataset['VOCAB_VEC'], ['/gpu:0'], **hp)
+                    dataset['VOCAB_VEC'], device, **hp)
 
     train_data = [dataset['seq'][train_idx], dataset['all_data'][train_idx],
                   dataset['all_row_col'][train_idx], dataset['segment_size'][train_idx]]
@@ -195,7 +195,6 @@ if __name__ == "__main__":
                                                probabilistic=FLAGS.probabilistic,
                                                nucleotide_label=True)[0]  # load one at a time
     np.save(os.path.join(output_dir, 'splits.npy'), dataset['splits'])
-    run_one_rbp(0, None)
     manager = mp.Manager()
     q = manager.Queue()
     pool = Pool(FLAGS.parallel_processes + 1)
