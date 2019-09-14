@@ -207,7 +207,7 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
         dataset['VOCAB'] = VOCAB
         dataset['VOCAB_VEC'] = VOCAB_VEC
 
-        kf = KFold(n_splits=10)
+        kf = KFold(n_splits=10, shuffle=True)
         splits = kf.split(all_id)
         dataset['splits'] = list(splits)
 

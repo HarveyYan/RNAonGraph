@@ -391,7 +391,8 @@ def fold_rna_from_file(filepath, p=None, fold_algo='rnafold', probabilistic=Fals
             pickle.dump(sp_prob_matrix,
                         open(os.path.join(os.path.dirname(filepath), '{}prob_mat.obj'.format(prefix)), 'wb'))
     elif fold_algo == 'rnaplfold':
-        winsize = kwargs.get('w', 70)
+        print('running rnaplfold with winsize 150')
+        winsize = kwargs.get('w', 150)
         fold_func = partial(fold_seq_rnaplfold, w=winsize, l=winsize, cutoff=1e-4, no_lonely_bps=True)
         res = list(pool.imap(fold_func, all_seq))
         sp_rel_matrix = []

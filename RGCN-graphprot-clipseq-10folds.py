@@ -79,7 +79,7 @@ def Logger(q):
     import time
     all_auc = []
     registered_gpus = {}
-    logger = lib.logger.CSVLogger('results.csv', output_dir, ['fold', 'acc', 'auc'])
+    logger = lib.logger.CSVLogger('results.csv', output_dir, ['fold', 'nuc_acc', 'pos_acc', 'seq_acc', 'auc'])
     while True:
         msg = q.get()
         print(msg)
@@ -153,18 +153,21 @@ def run_one_rbp(idx, q):
 
     test_data = [dataset['seq'][test_idx], dataset['all_data'][test_idx],
                  dataset['all_row_col'][test_idx], dataset['segment_size'][test_idx]]
-    all_prediction, acc, auc = model.predict(test_data, y=dataset['label'][test_idx])
-    print('Evaluation (without masking) on held-out test set, acc: %.3f, auc: %.3f' % (acc, auc))
 
     cost, acc, auc = model.evaluate(test_data, dataset['label'][test_idx], BATCH_SIZE)
-    print('Evaluation (with masking) on held-out test set, acc: %.3f, auc: %.3f' % (acc, auc))
+    if FLAGS.return_label:
+        print('Evaluation (with masking) on held-out test set, acc: %.3f, auc: %.3f' % (acc, auc))
+    else:
+        print('Evaluation (with masking) on held-out test set, acc (nuc, pos, seq): %s, auc: %.3f' % (acc, auc))
 
     model.delete()
     reload(lib.plot)
     reload(lib.logger)
     q.put({
         'fold': idx,
-        'acc': acc,
+        'nuc_acc': acc[0],
+        'pos_acc': acc[1],
+        'seq_acc': acc[2],
         'auc': auc
     })
 

@@ -52,12 +52,12 @@ class SparseMaskRGCN:
                     0.9, use_nesterov=True
                 )
             else:
-                self.optimizer = AMSGrad(
-                    self.learning_rate * self.lr_multiplier, beta2=0.999)
-                # self.optimizer = tf.contrib.opt.AdamWOptimizer(
-                #     1e-4,
-                #     learning_rate=self.learning_rate * self.lr_multiplier
-                # )
+                # self.optimizer = AMSGrad(
+                #     self.learning_rate * self.lr_multiplier, beta2=0.999)
+                self.optimizer = tf.contrib.opt.AdamWOptimizer(
+                    1e-4,
+                    learning_rate=self.learning_rate * self.lr_multiplier
+                )
 
             with tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
                 self._build_ggnn()
@@ -76,12 +76,9 @@ class SparseMaskRGCN:
         self.adj_mat_ph = [tf.sparse_placeholder(tf.float32, shape=[None, None]) for _ in range(self.edge_dim)]
         # nb_nodes x nb_nodes
 
-        if self.return_label:
-            self.labels = tf.placeholder(tf.int32, shape=[None, ])  # binary
-        else:
-            self.labels = tf.placeholder(tf.int32, shape=[None, None, ])  # nucleotide level label
+        self.labels = tf.placeholder(tf.int32, shape=[None, ])  # batch_size if return_label is True else nb_nodes
         self.max_len = tf.placeholder(tf.int32, shape=())
-        self.segment_length = tf.placeholder(tf.int32, shape=[None, ])
+        self.segment_length = tf.placeholder(tf.int32, shape=[None, ])  # always batch_size
 
         self.is_training_ph = tf.placeholder(tf.bool, ())
         self.global_step = tf.placeholder(tf.int32, ())
@@ -127,8 +124,9 @@ class SparseMaskRGCN:
                 # variables for sparse implementation default placement to gpu
                 msg_tensor = sparse_graph_convolution_layers(name, (self.adj_mat_ph, hidden_tensor, node_tensor),
                                                              self.units, reuse=self.reuse_weights)
+                msg_tensor = normalize('Norm' if self.reuse_weights else 'Norm%d' % (i + 1),
+                                       msg_tensor, self.use_bn, self.is_training_ph)
                 msg_tensor = tf.nn.leaky_relu(msg_tensor)
-                msg_tensor = normalize('Norm_%d' % (i + 1), msg_tensor, self.use_bn, self.is_training_ph)
                 msg_tensor = tf.layers.dropout(msg_tensor, self.dropout_rate, training=self.is_training_ph)
 
                 if hidden_tensor is None:  # hidden_state
@@ -146,41 +144,37 @@ class SparseMaskRGCN:
         self.hidden_tensor = hidden_tensor
 
         if self.return_label:
-            output = tf.concat([hidden_tensor, node_tensor], axis=-1)
-            input_dim = self.units * 2
-        else:
+            # output = tf.concat([hidden_tensor, node_tensor], axis=-1)
             output = hidden_tensor
-            input_dim = self.units
 
-        # while loop to recover batch size
-        batch_output = tf.TensorArray(tf.float32, size=tf.shape(self.segment_length)[0], infer_shape=True,
-                                      dynamic_size=True)
-        mask_offset = tf.TensorArray(tf.int32, size=tf.shape(self.segment_length)[0], infer_shape=True,
-                                     dynamic_size=True)
-        i = tf.constant(0)
-        start_idx = tf.constant(0)
-        while_condition = lambda i, _1, _2, _3: tf.less(i, tf.shape(self.segment_length)[0])
+            # while loop to recover batch size
+            batch_output = tf.TensorArray(tf.float32, size=tf.shape(self.segment_length)[0], infer_shape=True,
+                                          dynamic_size=True)
+            mask_offset = tf.TensorArray(tf.int32, size=tf.shape(self.segment_length)[0], infer_shape=True,
+                                         dynamic_size=True)
+            i = tf.constant(0)
+            start_idx = tf.constant(0)
+            while_condition = lambda i, _1, _2, _3: tf.less(i, tf.shape(self.segment_length)[0])
 
-        def body(i, start_idx, batch_output, mask_offset):
-            end_idx = start_idx + self.segment_length[i]
-            segment = output[start_idx:end_idx]
-            # pad segment to max len
-            segment = tf.pad(segment, [[self.max_len - self.segment_length[i], 0], [0, 0]])
-            batch_output = batch_output.write(i, segment)
-            mask_offset = mask_offset.write(i, self.max_len - self.segment_length[i])
-            return [tf.add(i, 1), end_idx, batch_output, mask_offset]
+            def body(i, start_idx, batch_output, mask_offset):
+                end_idx = start_idx + self.segment_length[i]
+                segment = output[start_idx:end_idx]
+                # pad segment to max len
+                segment = tf.pad(segment, [[self.max_len - self.segment_length[i], 0], [0, 0]])
+                batch_output = batch_output.write(i, segment)
+                mask_offset = mask_offset.write(i, self.max_len - self.segment_length[i])
+                return [tf.add(i, 1), end_idx, batch_output, mask_offset]
 
-        _, _, batch_output, mask_offset = tf.while_loop(while_condition, body,
-                                                        [i, start_idx, batch_output, mask_offset])
-        output = batch_output.stack()
-        mask_offset = mask_offset.stack()
+            _, _, batch_output, mask_offset = tf.while_loop(while_condition, body,
+                                                            [i, start_idx, batch_output, mask_offset])
+            output = batch_output.stack()
+            mask_offset = mask_offset.stack()
 
-        if self.return_label:
             # globally pooling along the spatial axis of data,
             # arriving at a single feature vector for the whole graph
             if self.use_conv:
                 with tf.variable_scope('seq_scan'):
-                    output = lib.ops.Conv1D.conv1d('conv1', input_dim, self.units, 10, output, biases=False,
+                    output = lib.ops.Conv1D.conv1d('conv1', self.units * 2, self.units, 10, output, biases=False,
                                                    pad_mode='VALID', variables_on_cpu=False)
                     output = normalize('bn1', output, self.use_bn, self.is_training_ph)
                     output = tf.nn.relu(output)
@@ -196,6 +190,8 @@ class SparseMaskRGCN:
                 output = lib.ops.LSTM.set2set_pooling('set2set_pooling', output, self.pool_steps, self.dropout_rate,
                                                       self.is_training_ph, self.lstm_encoder, mask_offset,
                                                       variables_on_cpu=False)
+        else:
+            output = hidden_tensor  # all graphs in one
 
         self.output = lib.ops.Linear.linear('OutputMapping', output.get_shape().as_list()[-1],
                                             2, output, variables_on_cpu=False)  # categorical logits
@@ -205,7 +201,6 @@ class SparseMaskRGCN:
 
         if self.return_label:
             self.cost = tf.reduce_mean(
-                tf.sequence_mask(self.segment_length, self.max_len)[:, :, None] *
                 tf.nn.softmax_cross_entropy_with_logits(
                     logits=self.output,
                     labels=tf.one_hot(self.labels, depth=2),
@@ -226,24 +221,51 @@ class SparseMaskRGCN:
         if self.return_label:
             self.acc_val, self.acc_update_op = tf.metrics.accuracy(
                 labels=self.labels,
-                predictions=tf.argmax(self.prediction, axis=-1),
+                predictions=tf.to_int32(tf.argmax(self.prediction, axis=-1)),
             )
         else:
-            # correct classification of an entire RNA sequence
-            self.acc_val, self.acc_update_op = tf.metrics.accuracy(
-                labels=tf.ones(tf.shape(self.prediction)[0]),
-                predictions=tf.reduce_prod(
+            # nucleotide level accuracy
+            self.nuc_acc_val, self.nuc_acc_update_op = tf.metrics.accuracy(
+                labels=self.labels,
+                predictions=tf.argmax(self.prediction, axis=-1),
+            )
+
+            def make_seq_ids(lens):
+                # Get accumulated sums (e.g. [2, 3, 1] -> [2, 5, 6])
+                c = tf.cumsum(lens)
+                # Take all but the last accumulated sum value as indices
+                idx = c[:-1]
+                # Put ones on every index
+                s = tf.scatter_nd(tf.expand_dims(idx, 1), tf.ones_like(idx), [c[-1]])
+                # Use accumulated sums to generate ids for every segment
+                return tf.cumsum(s)
+
+            # assemble batch index
+            segment_idx = make_seq_ids(self.segment_length)
+
+            # sequence level accuracy of precise matching on each location
+            self.pos_acc_val, self.pos_acc_update_op = tf.metrics.accuracy(
+                labels=tf.ones(tf.shape(self.segment_length)[0]),
+                predictions=tf.math.segment_prod(
                     tf.cast(
                         tf.equal(
                             tf.to_int32(tf.argmax(self.prediction, axis=-1)),
                             self.labels
-                        ), tf.float32), axis=-1)
+                        ), tf.float32), segment_idx)
             )
+            # sequence level accuracy of whether or not containing a binding site
+            # comparable to the accuracy reported in the other literature
+            self.seq_acc_val, self.seq_acc_update_op = tf.metrics.accuracy(
+                labels=tf.math.segment_max(self.labels, segment_idx),
+                predictions=tf.math.segment_max(tf.to_int32(tf.argmax(self.prediction, axis=-1)), segment_idx),
+            )
+            self.acc_val = [self.nuc_acc_val, self.pos_acc_val, self.seq_acc_val]
+            self.acc_update_op = [self.nuc_acc_update_op, self.pos_acc_update_op, self.seq_acc_update_op]
 
         # example level auc or nucleotide level auc
         self.auc_val, self.auc_update_op = tf.metrics.auc(
-            labels=self.labels if self.return_label else tf.reshape(self.labels, [-1]),
-            predictions=self.prediction[:, 1] if self.return_label else tf.reshape(self.prediction[:, :, 1], [-1]),
+            labels=self.labels,
+            predictions=self.prediction[:, 1],
         )
 
     def _init_session(self):
@@ -328,8 +350,13 @@ class SparseMaskRGCN:
         best_dev_cost = np.inf
         lib.plot.set_output_dir(output_dir)
         if logging:
-            logger = lib.logger.CSVLogger('run.csv', output_dir,
-                                          ['epoch', 'cost', 'acc', 'auc', 'dev_cost', 'dev_acc', 'dev_auc'])
+            if self.return_label:
+                logger = lib.logger.CSVLogger('run.csv', output_dir,
+                                              ['epoch', 'cost', 'acc', 'auc', 'dev_cost', 'dev_acc', 'dev_auc'])
+            else:
+                logger = lib.logger.CSVLogger('run.csv', output_dir,
+                                              ['epoch', 'cost', 'nuc_acc', 'pos_acc', 'seq_acc', 'auc',
+                                               'dev_cost', 'dev_nuc_acc', 'dev_pos_acc', 'dev_seq_acc', 'dev_auc'])
 
         # to
         # major changes: use tensorflow dataloader and prefetch
@@ -355,7 +382,7 @@ class SparseMaskRGCN:
 
                 _max_len = max(_segment)
                 if not self.return_label:
-                    _labels = np.array([np.pad(label, [0, _max_len - len(label)], mode='constant') for label in _labels])
+                    _labels = np.concatenate(_labels, axis=0)
                 all_adj_mat = self._merge_sparse_submatrices(_rel_data, _row_col, _segment)
 
                 feed_dict = {
@@ -375,24 +402,49 @@ class SparseMaskRGCN:
             print('preprocessing time: %.4f, training time: %.4f' % (prepro_time / (i + 1), training_time / (i + 1)))
             train_cost, train_acc, train_auc = self.evaluate(X, train_targets, batch_size)
             lib.plot.plot('train_cost', train_cost)
-            lib.plot.plot('train_acc', train_acc)
+            if self.return_label:
+                lib.plot.plot('train_acc', train_acc)
+            else:
+                lib.plot.plot('train_nuc_acc', train_acc[0])
+                lib.plot.plot('train_pos_acc', train_acc[1])
+                lib.plot.plot('train_seq_acc', train_acc[2])
             lib.plot.plot('train_auc', train_auc)
 
             dev_cost, dev_acc, dev_auc = self.evaluate(dev_data, dev_targets, batch_size)
             lib.plot.plot('dev_cost', dev_cost)
-            lib.plot.plot('dev_acc', dev_acc)
+            if self.return_label:
+                lib.plot.plot('dev_acc', dev_acc)
+            else:
+                lib.plot.plot('dev_nuc_acc', dev_acc[0])
+                lib.plot.plot('dev_pos_acc', dev_acc[1])
+                lib.plot.plot('dev_seq_acc', dev_acc[2])
             lib.plot.plot('dev_auc', dev_auc)
 
             if logging:
-                logger.update_with_dict({
-                    'epoch': epoch,
-                    'cost': train_cost,
-                    'acc': train_acc,
-                    'auc': train_auc,
-                    'dev_cost': dev_cost,
-                    'dev_acc': dev_acc,
-                    'dev_auc': dev_auc
-                })
+                if self.return_label:
+                    logger.update_with_dict({
+                        'epoch': epoch,
+                        'cost': train_cost,
+                        'acc': train_acc,
+                        'auc': train_auc,
+                        'dev_cost': dev_cost,
+                        'dev_acc': dev_acc,
+                        'dev_auc': dev_auc
+                    })
+                else:
+                    logger.update_with_dict({
+                        'epoch': epoch,
+                        'cost': train_cost,
+                        'nuc_acc': train_acc[0],
+                        'pos_acc': train_acc[1],
+                        'seq_acc': train_acc[2],
+                        'auc': train_auc,
+                        'dev_cost': dev_cost,
+                        'dev_nuc_acc': dev_acc[0],
+                        'dev_pos_acc': dev_acc[1],
+                        'dev_seq_acc': dev_acc[2],
+                        'dev_auc': dev_auc
+                    })
 
             lib.plot.flush()
             lib.plot.tick()
@@ -423,7 +475,7 @@ class SparseMaskRGCN:
 
             _max_len = max(_segment)
             if not self.return_label:
-                _labels = np.array([np.pad(label, [0, _max_len - len(label)], mode='constant') for label in _labels])
+                _labels = np.concatenate(_labels, axis=0)
             all_adj_mat = self._merge_sparse_submatrices(_rel_data, _row_col, _segment)
 
             feed_dict = {
