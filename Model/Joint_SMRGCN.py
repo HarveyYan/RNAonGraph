@@ -40,7 +40,7 @@ class JSMRGCN:
         self.probabilistic = kwargs.get('probabilistic', True)
 
         self.mixing_ratio = kwargs.get('mixing_ratio', 0.5)
-        self.nuc_embedding_lstm = kwargs.get('nuc_embedding_lstm', False)
+        self.node_emb_af_lstm = kwargs.get('node_emb_af_lstm', True)
 
         self.g = tf.Graph()
         with self.g.as_default():
@@ -135,7 +135,8 @@ class JSMRGCN:
                 else:
                     hidden_tensor, _ = cell(msg_tensor, state)
                 # [batch_size, length, u]
-        self.hidden_tensor = hidden_tensor  # a flattened vector
+        # the original nucleotide embeddings learnt by GNN
+        self.hidden_tensor = hidden_tensor
         # [nb_nodes, units] no dummies
         output = hidden_tensor
 
@@ -161,21 +162,25 @@ class JSMRGCN:
                                                         [i, start_idx, batch_output, mask_offset])
         output = batch_output.stack()
         mask_offset = mask_offset.stack()
-
-        if self.nuc_embedding_lstm:
-            self.nuc_embedding = lib.ops.LSTM.BiLSTMEncoder('powerful_node_embedding', self.units, output, self.max_len,
-                                       self.dropout_rate, self.is_training_ph, mask_offset)
-        else:
-            self.nuc_embedding = output
-        # [batch_size, max_len, units]
-        self.nuc_output = lib.ops.Linear.linear('hidden_output', self.units, 2, self.nuc_embedding)
-        # [batch_size, max_len, 2]
+        self.mask_offset = mask_offset
+        self.gnn_nuc_embedding = output
 
         # we have dummies padded to the front
         with tf.variable_scope('set2set_pooling'):
             output = lib.ops.LSTM.set2set_pooling('set2set_pooling', output, self.pool_steps, self.dropout_rate,
                                                   self.is_training_ph, self.lstm_encoder, mask_offset,
                                                   variables_on_cpu=False)
+
+        if self.lstm_encoder and self.node_emb_af_lstm:
+            self.nuc_embedding = tf.get_collection('bilstm_nuc_emb')[0]
+            dims = self.units * 2
+        else:
+            self.nuc_embedding = self.gnn_nuc_embedding
+            dims = self.units
+
+        # [batch_size, max_len, units]
+        self.nuc_output = lib.ops.Linear.linear('hidden_output', dims, 2, self.nuc_embedding)
+        # [batch_size, max_len, 2]
 
         self.output = lib.ops.Linear.linear('OutputMapping', output.get_shape().as_list()[-1],
                                             2, output, variables_on_cpu=False)  # categorical logits
@@ -193,7 +198,7 @@ class JSMRGCN:
         # nucleotide level loss
         self.nuc_cost = tf.reduce_mean(
             # dummies are padded to the front...
-            tf.abs(tf.sequence_mask(self.segment_length, maxlen=self.max_len, dtype=tf.float32) - 1.) *
+            (1.0 - tf.sequence_mask(self.mask_offset, maxlen=self.max_len, dtype=tf.float32)) *
             tf.nn.softmax_cross_entropy_with_logits(
                 logits=self.nuc_output,
                 labels=tf.one_hot(self.labels, depth=2),
@@ -213,11 +218,11 @@ class JSMRGCN:
             predictions=tf.to_int32(tf.argmax(self.prediction, axis=-1)),
         )
 
-        # graph level accuracy of precise matching on each location
+        # nucleotide level accuracy of precise matching on each location
         self.pos_acc_val, self.pos_acc_update_op = tf.metrics.accuracy(
             labels=self.segment_length,
             predictions=tf.reduce_sum(
-                tf.abs(tf.sequence_mask(self.segment_length, maxlen=self.max_len, dtype=tf.float32) - 1.) *
+                (1.0 - tf.sequence_mask(self.mask_offset, maxlen=self.max_len, dtype=tf.float32)) *
                 tf.cast(
                     tf.equal(
                         tf.to_int32(tf.argmax(self.nuc_prediction, axis=-1)),
@@ -225,8 +230,16 @@ class JSMRGCN:
                     ), tf.float32), axis=-1)  # along the RNA sequence
         )
 
-        self.acc_val = [self.pos_acc_val, self.seq_acc_val]
-        self.acc_update_op = [self.pos_acc_update_op, self.seq_acc_update_op]
+        # nucleotide level accuracy of containing a binding site
+        self.nuc_acc_val, self.nuc_acc_update_op = tf.metrics.accuracy(
+            labels=tf.reduce_max(self.labels, axis=-1),
+            predictions=tf.to_int32(tf.reduce_max(
+                tf.argmax(self.nuc_prediction, axis=-1), axis=-1)),
+        )
+
+        self.acc_val = [self.pos_acc_val, self.seq_acc_val, self.nuc_acc_val]
+        self.acc_update_op = [self.pos_acc_update_op, self.seq_acc_update_op,
+                              self.nuc_acc_update_op]
 
         # graph level accuracy
         self.auc_val, self.auc_update_op = tf.metrics.auc(
@@ -315,8 +328,8 @@ class JSMRGCN:
         if logging:
 
             logger = lib.logger.CSVLogger('run.csv', output_dir,
-                                          ['epoch', 'cost', 'pos_acc', 'seq_acc', 'auc',
-                                           'dev_cost', 'dev_pos_acc', 'dev_seq_acc', 'dev_auc'])
+                                          ['epoch', 'cost', 'pos_acc', 'seq_acc', 'nuc_acc', 'auc',
+                                           'dev_cost', 'dev_pos_acc', 'dev_seq_acc', 'dev_nuc_acc', 'dev_auc'])
 
         for epoch in range(epoch_to_start, epochs):
 
@@ -357,12 +370,14 @@ class JSMRGCN:
             lib.plot.plot('train_cost', train_cost)
             lib.plot.plot('train_pos_acc', train_acc[0])
             lib.plot.plot('train_seq_acc', train_acc[1])
+            lib.plot.plot('train_nuc_acc', train_acc[2])
             lib.plot.plot('train_auc', train_auc)
 
             dev_cost, dev_acc, dev_auc = self.evaluate(dev_data, dev_targets, batch_size)
             lib.plot.plot('dev_cost', dev_cost)
             lib.plot.plot('dev_pos_acc', dev_acc[0])
             lib.plot.plot('dev_seq_acc', dev_acc[1])
+            lib.plot.plot('dev_nuc_acc', dev_acc[2])
             lib.plot.plot('dev_auc', dev_auc)
 
             logger.update_with_dict({
@@ -370,10 +385,12 @@ class JSMRGCN:
                 'cost': train_cost,
                 'pos_acc': train_acc[0],
                 'seq_acc': train_acc[1],
+                'nuc_acc': train_acc[2],
                 'auc': train_auc,
                 'dev_cost': dev_cost,
                 'dev_pos_acc': dev_acc[0],
                 'dev_seq_acc': dev_acc[1],
+                'dev_nuc_acc': dev_acc[2],
                 'dev_auc': dev_auc
             })
 

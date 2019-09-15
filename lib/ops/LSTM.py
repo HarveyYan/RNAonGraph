@@ -201,6 +201,7 @@ def set2set_pooling(name, inputs, T, dropout_rate, is_training_ph, lstm_encoder=
                     cell = tf.nn.rnn_cell.LSTMCell(nb_features, name='decoder_lstm_cell')
             else:
                 cell = tf.nn.rnn_cell.LSTMCell(nb_features, name='decoder_lstm_cell')
+            tf.add_to_collection('bilstm_nuc_emb', inputs)
         else:
             if variables_on_cpu:
                 with tf.device('/cpu:0'):

@@ -32,6 +32,9 @@ tf.app.flags.DEFINE_string('fold_algo', 'rnaplfold', '')
 # major changes !
 tf.app.flags.DEFINE_string('train_rbp_id', 'PARCLIP_PUM2', '')
 tf.app.flags.DEFINE_bool('force_folding', False, '')
+
+tf.app.flags.DEFINE_float('mixing_ratio', 0.5, '')
+tf.app.flags.DEFINE_bool('node_emb_af_lstm', True, '')
 FLAGS = tf.app.flags.FLAGS
 
 assert (FLAGS.fold_algo in ['rnafold', 'rnasubopt', 'rnaplfold'])
@@ -69,6 +72,8 @@ hp = {
     'lstm_ggnn': FLAGS.lstm_ggnn,
     'probabilistic': FLAGS.probabilistic,
     'lstm_encoder': True,
+    'mixing_ratio': FLAGS.mixing_ratio,
+    'node_emb_af_lstm': FLAGS.node_emb_af_lstm,
 }
 
 
@@ -160,9 +165,9 @@ def run_one_rbp(idx, q):
     reload(lib.logger)
     q.put({
         'fold': idx,
-        'nuc_acc': acc[0],
-        'pos_acc': acc[1],
-        'seq_acc': acc[2],
+        'pos_acc': acc[0],
+        'seq_acc': acc[1],
+        'nuc_acc': acc[2],
         'auc': auc
     })
 
@@ -192,7 +197,7 @@ if __name__ == "__main__":
     dataset = \
         lib.graphprot_dataloader.load_clip_seq([TRAIN_RBP_ID], use_embedding=FLAGS.use_embedding,
                                                fold_algo=FLAGS.fold_algo, force_folding=FLAGS.force_folding,
-                                               probabilistic=FLAGS.probabilistic,
+                                               probabilistic=FLAGS.probabilistic, w=150,
                                                nucleotide_label=True)[0]  # load one at a time
     np.save(os.path.join(output_dir, 'splits.npy'), dataset['splits'])
     manager = mp.Manager()

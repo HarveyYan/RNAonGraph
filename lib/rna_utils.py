@@ -303,6 +303,9 @@ def load_dotbracket(filepath, pool=None, fold_algo='rnafold', probabilistic=Fals
 
 def load_mat(filepath, pool=None, fold_algo='rnafold', probabilistic=False, **kwargs):
     prefix = '%s_%s_' % (fold_algo, probabilistic)
+    # folding length is crucial hyperparam for local RNA folding, therefore should be marked
+    if fold_algo == 'rnaplfold':
+        prefix += '%d_'%(kwargs.get('w', 150))
     force_folding = kwargs.get('force_folding', False)
     if force_folding or not os.path.exists(os.path.join(os.path.dirname(filepath), '{}rel_mat.obj'.format(prefix))) or probabilistic and \
             not os.path.exists(os.path.join(os.path.dirname(filepath), '{}prob_mat.obj'.format(prefix))):
@@ -391,8 +394,8 @@ def fold_rna_from_file(filepath, p=None, fold_algo='rnafold', probabilistic=Fals
             pickle.dump(sp_prob_matrix,
                         open(os.path.join(os.path.dirname(filepath), '{}prob_mat.obj'.format(prefix)), 'wb'))
     elif fold_algo == 'rnaplfold':
-        print('running rnaplfold with winsize 150')
         winsize = kwargs.get('w', 150)
+        print('running rnaplfold with winsize %d' % (winsize))
         fold_func = partial(fold_seq_rnaplfold, w=winsize, l=winsize, cutoff=1e-4, no_lonely_bps=True)
         res = list(pool.imap(fold_func, all_seq))
         sp_rel_matrix = []

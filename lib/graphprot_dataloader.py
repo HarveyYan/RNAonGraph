@@ -123,7 +123,6 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
     fold_algo = kwargs.get('fold_algo', 'rnafold')
     probabilistic = kwargs.get('probabilistic', False)
     load_mat = kwargs.get('load_mat', True)
-    force_folding = kwargs.get('force_folding', False)
     nucleotide_label = kwargs.get('nucleotide_label', False)
 
     clip_data = []
@@ -140,11 +139,9 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
         if load_mat:
             # load sparse matrices
             pos_matrix = lib.rna_utils.load_mat(path_template.format(rbp, 'train', 'positives')
-                                                , pool, fold_algo, probabilistic, load_dense=False,
-                                                force_folding=force_folding)
+                                                , pool, load_dense=False, **kwargs)
             neg_matrix = lib.rna_utils.load_mat(path_template.format(rbp, 'train', 'negatives')
-                                                , pool, fold_algo, probabilistic, load_dense=False,
-                                                force_folding=force_folding)
+                                                , pool, load_dense=False, **kwargs)
             if probabilistic:
                 # we can do this simply because the secondary structure is not a multigraph
                 pos_adjacency_matrix, pos_probability_matrix = pos_matrix
