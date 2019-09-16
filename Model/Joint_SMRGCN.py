@@ -196,13 +196,12 @@ class JSMRGCN:
                 labels=tf.one_hot(tf.reduce_max(self.labels, axis=1), depth=2),
             ))
         # nucleotide level loss
-        self.nuc_cost = tf.reduce_mean(
-            # dummies are padded to the front...
-            (1.0 - tf.sequence_mask(self.mask_offset, maxlen=self.max_len, dtype=tf.float32)) *
-            tf.nn.softmax_cross_entropy_with_logits(
-                logits=self.nuc_output,
-                labels=tf.one_hot(self.labels, depth=2),
-            ))
+        # dummies are padded to the front...
+        self.nuc_cost = tf.reduce_sum((1.0 - tf.sequence_mask(self.mask_offset, maxlen=self.max_len, dtype=tf.float32)) * \
+                        tf.nn.softmax_cross_entropy_with_logits(
+                            logits=self.nuc_output,
+                            labels=tf.one_hot(self.labels, depth=2),
+                        )) / tf.cast(tf.reduce_sum(self.segment_length), tf.float32)
 
         self.cost = self.mixing_ratio * self.graph_cost + (1 - self.mixing_ratio) * self.nuc_cost
 
@@ -326,10 +325,9 @@ class JSMRGCN:
         best_dev_cost = np.inf
         lib.plot.set_output_dir(output_dir)
         if logging:
-
             logger = lib.logger.CSVLogger('run.csv', output_dir,
-                                          ['epoch', 'cost', 'pos_acc', 'seq_acc', 'nuc_acc', 'auc',
-                                           'dev_cost', 'dev_pos_acc', 'dev_seq_acc', 'dev_nuc_acc', 'dev_auc'])
+                                          ['epoch', 'cost', 'graph_cost', 'nuc_cost', 'pos_acc', 'seq_acc', 'nuc_acc', 'auc',
+                                           'dev_cost', 'dev_graph_cost', 'dev_nuc_cost', 'dev_pos_acc', 'dev_seq_acc', 'dev_nuc_acc', 'dev_auc'])
 
         for epoch in range(epoch_to_start, epochs):
 
@@ -367,14 +365,18 @@ class JSMRGCN:
                 training_time += (time.time() - prepro_end)
             print('preprocessing time: %.4f, training time: %.4f' % (prepro_time / (i + 1), training_time / (i + 1)))
             train_cost, train_acc, train_auc = self.evaluate(X, train_targets, batch_size)
-            lib.plot.plot('train_cost', train_cost)
+            lib.plot.plot('train_cost', train_cost[0])
+            lib.plot.plot('train_graph_cost', train_cost[1])
+            lib.plot.plot('train_nuc_cost', train_cost[2])
             lib.plot.plot('train_pos_acc', train_acc[0])
             lib.plot.plot('train_seq_acc', train_acc[1])
             lib.plot.plot('train_nuc_acc', train_acc[2])
             lib.plot.plot('train_auc', train_auc)
 
             dev_cost, dev_acc, dev_auc = self.evaluate(dev_data, dev_targets, batch_size)
-            lib.plot.plot('dev_cost', dev_cost)
+            lib.plot.plot('dev_cost', dev_cost[0])
+            lib.plot.plot('dev_graph_cost', dev_cost[1])
+            lib.plot.plot('dev_nuc_cost', dev_cost[2])
             lib.plot.plot('dev_pos_acc', dev_acc[0])
             lib.plot.plot('dev_seq_acc', dev_acc[1])
             lib.plot.plot('dev_nuc_acc', dev_acc[2])
@@ -382,12 +384,16 @@ class JSMRGCN:
 
             logger.update_with_dict({
                 'epoch': epoch,
-                'cost': train_cost,
+                'cost': train_cost[0],
+                'graph_cost': train_cost[1],
+                'nuc_cost': train_cost[2],
                 'pos_acc': train_acc[0],
                 'seq_acc': train_acc[1],
                 'nuc_acc': train_acc[2],
                 'auc': train_auc,
-                'dev_cost': dev_cost,
+                'dev_cost': dev_cost[0],
+                'dev_graph_cost': dev_cost[1],
+                'dev_nuc_cost': dev_cost[2],
                 'dev_pos_acc': dev_acc[0],
                 'dev_seq_acc': dev_acc[1],
                 'dev_nuc_acc': dev_acc[2],
@@ -397,8 +403,8 @@ class JSMRGCN:
             lib.plot.flush()
             lib.plot.tick()
 
-            if dev_cost < best_dev_cost:
-                best_dev_cost = dev_cost
+            if dev_cost[0] < best_dev_cost:
+                best_dev_cost = dev_cost[0]
                 save_path = self.saver.save(self.sess, checkpoints_dir, global_step=epoch)
                 print('Validation sample acc improved. Saved to path %s\n' % (save_path), flush=True)
             else:
@@ -412,6 +418,8 @@ class JSMRGCN:
     def evaluate(self, X, y, batch_size):
         node_tensor, all_rel_data, all_row_col, segment_length = X
         all_cost = 0.
+        all_graph_cost = 0.
+        all_nuc_cost = 0.
         iters_per_epoch = len(node_tensor) // batch_size + (0 if len(node_tensor) % batch_size == 0 else 1)
         for i in range(iters_per_epoch):
             _node_tensor, _rel_data, _row_col, _segment, _labels \
@@ -434,11 +442,15 @@ class JSMRGCN:
                 self.is_training_ph: False
             }
 
-            cost, _, _ = self.sess.run([self.cost, self.acc_update_op, self.auc_update_op], feed_dict)
+            cost, graph_cost, nuc_cost, _, _ = self.sess.run(
+                [self.cost, self.graph_cost, self.nuc_cost, self.acc_update_op, self.auc_update_op], feed_dict)
             all_cost += cost * len(_node_tensor)
+            all_graph_cost += graph_cost * len(_node_tensor)
+            all_nuc_cost += nuc_cost * len(_node_tensor)
         acc, auc = self.sess.run([self.acc_val, self.auc_val])
         self.sess.run(self.local_init)
-        return all_cost / len(node_tensor), acc, auc
+        return (all_cost / len(node_tensor), all_graph_cost / len(node_tensor),
+                all_nuc_cost / len(node_tensor)), acc, auc
 
     def predict(self, X, y=None):
         # predict one at a time without masking
