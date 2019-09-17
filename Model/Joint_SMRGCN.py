@@ -13,6 +13,7 @@ from Model import _stats
 from lib.rgcn_utils import sparse_graph_convolution_layers, normalize
 import lib.plot, lib.logger, lib.clr
 import lib.ops.LSTM, lib.ops.Linear, lib.ops.Conv1D
+from lib.tf_ghm_loss import get_ghm_weight
 
 
 class JSMRGCN:
@@ -86,6 +87,7 @@ class JSMRGCN:
                                      self.hf_iters_per_epoch, mode='exp_range')
         else:
             self.lr_multiplier = 1.
+        self.mixing_ratio_var = tf.placeholder_with_default(self.mixing_ratio, ())
 
     def _build_ggnn(self):
         embedding = tf.get_variable('embedding_layer', shape=(self.vocab_size, self.node_dim),
@@ -197,13 +199,23 @@ class JSMRGCN:
             ))
         # nucleotide level loss
         # dummies are padded to the front...
-        self.nuc_cost = tf.reduce_sum((1.0 - tf.sequence_mask(self.mask_offset, maxlen=self.max_len, dtype=tf.float32)) * \
-                        tf.nn.softmax_cross_entropy_with_logits(
-                            logits=self.nuc_output,
-                            labels=tf.one_hot(self.labels, depth=2),
-                        )) / tf.cast(tf.reduce_sum(self.segment_length), tf.float32)
+        mask = 1.0 - tf.sequence_mask(self.mask_offset, maxlen=self.max_len, dtype=tf.float32)
+        # bins/M of 30 as suggested in the paper
+        self.nuc_cost = tf.reduce_sum(
+            get_ghm_weight(self.nuc_prediction, self.labels, mask, bins=30) * \
+            tf.nn.softmax_cross_entropy_with_logits(
+                logits=self.nuc_output,
+                labels=tf.one_hot(self.labels, depth=2),
+            )) / tf.cast(tf.reduce_sum(self.segment_length), tf.float32)
 
-        self.cost = self.mixing_ratio * self.graph_cost + (1 - self.mixing_ratio) * self.nuc_cost
+        # self.nuc_cost = tf.reduce_sum(
+        #     (1.0 - tf.sequence_mask(self.mask_offset, maxlen=self.max_len, dtype=tf.float32)) * \
+        #     tf.nn.softmax_cross_entropy_with_logits(
+        #         logits=self.nuc_output,
+        #         labels=tf.one_hot(self.labels, depth=2),
+        #     )) / tf.cast(tf.reduce_sum(self.segment_length), tf.float32)
+
+        self.cost = self.mixing_ratio_var * self.graph_cost + (1 - self.mixing_ratio_var) * self.nuc_cost
 
     def _train(self):
         self.gv = self.optimizer.compute_gradients(self.cost,
@@ -326,8 +338,10 @@ class JSMRGCN:
         lib.plot.set_output_dir(output_dir)
         if logging:
             logger = lib.logger.CSVLogger('run.csv', output_dir,
-                                          ['epoch', 'cost', 'graph_cost', 'nuc_cost', 'pos_acc', 'seq_acc', 'nuc_acc', 'auc',
-                                           'dev_cost', 'dev_graph_cost', 'dev_nuc_cost', 'dev_pos_acc', 'dev_seq_acc', 'dev_nuc_acc', 'dev_auc'])
+                                          ['epoch', 'cost', 'graph_cost', 'nuc_cost', 'pos_acc', 'seq_acc', 'nuc_acc',
+                                           'auc',
+                                           'dev_cost', 'dev_graph_cost', 'dev_nuc_cost', 'dev_pos_acc', 'dev_seq_acc',
+                                           'dev_nuc_acc', 'dev_auc'])
 
         for epoch in range(epoch_to_start, epochs):
 
@@ -357,7 +371,8 @@ class JSMRGCN:
                     self.segment_length: _segment,
                     self.global_step: i + epoch * iters_per_epoch,
                     self.hf_iters_per_epoch: iters_per_epoch // 2,
-                    self.is_training_ph: True
+                    self.is_training_ph: True,
+                    self.mixing_ratio_var: 0.05 if epoch < max(100, epochs//2) else 0.5
                 }
                 prepro_end = time.time()
                 prepro_time += (prepro_end - prepro_start)

@@ -73,10 +73,10 @@ def fold_seq_rnaplfold(seq, w, l, cutoff, no_lonely_bps):
                     # source_id < dest_id
                     row_col.append((source_id, dest_id))
                     link.append(3)
-                    prob.append(avg_prob**2)
+                    prob.append(avg_prob ** 2)
                     row_col.append((dest_id, source_id))
                     link.append(4)
-                    prob.append(avg_prob**2)
+                    prob.append(avg_prob ** 2)
             if 'start of base pair probability data' in line:
                 start_flag = True
     # delete RNAplfold output file.
@@ -102,7 +102,7 @@ def sample_one_seq(seq, passes=10):
             adj_mat_tmp[i, i - 1] = 2
     cmd = 'echo "%s" | RNAsubopt --stochBT=%d' % (seq, passes)
     all_struct = subprocess.check_output(cmd, shell=True). \
-                 decode('utf-8').rstrip().split('\n')[1:]
+                     decode('utf-8').rstrip().split('\n')[1:]
     all_adj_mat = []
     for struct in all_struct:
         adj_mat = adj_mat_tmp.copy()
@@ -291,6 +291,8 @@ def load_fasta_format(file):
 
 def load_dotbracket(filepath, pool=None, fold_algo='rnafold', probabilistic=False, **kwargs):
     prefix = '%s_%s_' % (fold_algo, probabilistic)
+    if fold_algo == 'rnaplfold' or fold_algo == 'rnashapes':
+        prefix += '%d_' % (kwargs.get('w', 150))
     full_path = os.path.join(os.path.dirname(filepath), '{}structures.npy'.format(prefix))
     if not os.path.exists(full_path):
         print(full_path, 'is missing. Begin folding from scratch.')
@@ -304,10 +306,11 @@ def load_dotbracket(filepath, pool=None, fold_algo='rnafold', probabilistic=Fals
 def load_mat(filepath, pool=None, fold_algo='rnafold', probabilistic=False, **kwargs):
     prefix = '%s_%s_' % (fold_algo, probabilistic)
     # folding length is crucial hyperparam for local RNA folding, therefore should be marked
-    if fold_algo == 'rnaplfold':
-        prefix += '%d_'%(kwargs.get('w', 150))
+    if fold_algo == 'rnaplfold' or fold_algo == 'rnashapes':
+        prefix += '%d_' % (kwargs.get('w', 150))
     force_folding = kwargs.get('force_folding', False)
-    if force_folding or not os.path.exists(os.path.join(os.path.dirname(filepath), '{}rel_mat.obj'.format(prefix))) or probabilistic and \
+    if force_folding or not os.path.exists(
+            os.path.join(os.path.dirname(filepath), '{}rel_mat.obj'.format(prefix))) or probabilistic and \
             not os.path.exists(os.path.join(os.path.dirname(filepath), '{}prob_mat.obj'.format(prefix))):
         print('adj mat or prob mat is missing. Begin folding from scratch.')
         fold_rna_from_file(filepath, pool, fold_algo, probabilistic, **kwargs)
@@ -354,6 +357,8 @@ def fold_rna_from_file(filepath, p=None, fold_algo='rnafold', probabilistic=Fals
 
     # compatible with already computed structures with RNAfold
     prefix = '%s_%s_' % (fold_algo, probabilistic)
+    if fold_algo == 'rnaplfold' or fold_algo == 'rnashapes':
+        prefix += '%d_' % (kwargs.get('w', 150))
 
     if p is None:
         pool = Pool(int(os.cpu_count() * 2 / 3))
