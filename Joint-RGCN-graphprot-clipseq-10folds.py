@@ -14,7 +14,7 @@ from Model.Joint_SMRGCN import JSMRGCN
 
 tf.logging.set_verbosity(tf.logging.FATAL)
 tf.app.flags.DEFINE_string('output_dir', '', '')
-tf.app.flags.DEFINE_integer('epochs', 50, '')
+tf.app.flags.DEFINE_integer('epochs', 200, '')
 tf.app.flags.DEFINE_list('gpu_device', '0,1', '')
 tf.app.flags.DEFINE_bool('use_clr', True, '')
 tf.app.flags.DEFINE_bool('use_momentum', False, '')
@@ -33,9 +33,9 @@ tf.app.flags.DEFINE_string('fold_algo', 'rnaplfold', '')
 tf.app.flags.DEFINE_string('train_rbp_id', 'PARCLIP_PUM2', '')
 tf.app.flags.DEFINE_bool('force_folding', False, '')
 
-tf.app.flags.DEFINE_float('mixing_ratio', 0.5, '')
-tf.app.flags.DEFINE_bool('node_emb_af_lstm', True, '')
+tf.app.flags.DEFINE_float('mixing_ratio', 0.05, '')
 tf.app.flags.DEFINE_integer('folding_winsize', 150, '')
+tf.app.flags.DEFINE_bool('use_ghm', False, '')
 FLAGS = tf.app.flags.FLAGS
 
 assert (FLAGS.fold_algo in ['rnafold', 'rnasubopt', 'rnaplfold'])
@@ -72,9 +72,8 @@ hp = {
     'layers': FLAGS.nb_layers,
     'lstm_ggnn': FLAGS.lstm_ggnn,
     'probabilistic': FLAGS.probabilistic,
-    'lstm_encoder': True,
     'mixing_ratio': FLAGS.mixing_ratio,
-    'node_emb_af_lstm': FLAGS.node_emb_af_lstm,
+    'use_ghm': FLAGS.use_ghm,
 }
 
 
@@ -178,9 +177,9 @@ if __name__ == "__main__":
     cur_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     if FLAGS.output_dir == '':
-        output_dir = os.path.join('output', 'SMRGCN-Graphprot', cur_time)
+        output_dir = os.path.join('output', 'Joint-SMRGCN-Graphprot', cur_time)
     else:
-        output_dir = os.path.join('output', 'SMRGCN-Graphprot', cur_time + '-' + FLAGS.output_dir)
+        output_dir = os.path.join('output', 'Joint-SMRGCN-Graphprot', cur_time + '-' + FLAGS.output_dir)
 
     os.makedirs(output_dir)
     lib.plot.set_output_dir(output_dir)
