@@ -27,10 +27,76 @@ def adj_to_bias(adj, nhood=1):
     return -1e9 * (1.0 - mt)
 
 
-'''
-equilibrium probability using RNAplfold
-'''
 
+
+# >>>> equilibrium probability using RNAplfold >>>>>>>
+
+def fold_seq_rnashapes(seq, winsize, iterations=100):
+    stride = winsize // 4
+    cmd = 'echo %s | RNAshapes -w %d -W %d -i %d -A -t 1 -c %d -M 0 -o 1' % (seq, winsize, stride, iterations, 10)
+    ret = subprocess.check_output(cmd, shell=True)
+    lines = re.sub(' +', ' ', ret.decode('utf-8')).rstrip().split('\n')
+
+    # assemble adjacency matrix
+    row_col, link, prob, norm = [], [], [], []
+    length = len(seq)
+    for i in range(length):
+        if i != length - 1:
+            row_col.append((i, i + 1))
+            link.append(1)
+            prob.append(1.)
+            norm.append(1)
+        if i != 0:
+            row_col.append((i, i - 1))
+            link.append(2)
+            prob.append(1.)
+            norm.append(1)
+    for line in lines:
+        if len(line) > 0:
+            if line[0] >= '0' and line[0] <= '9':
+                # indices
+                start_idx = int(line.split(' ')[0]) - 1
+                local_idx = []
+            elif line[0] in ['(', '.', ')']:
+                # secondary structures
+                tokens = line.split(' ')
+                struct = tokens[0]
+                probability = float(tokens[2])
+
+                bg = fgb.BulgeGraph.from_dotbracket(struct)
+                for i, ele in enumerate(struct):
+                    if ele == '(':
+                        pair_from = i + start_idx
+                        pair_to = bg.pairing_partner(i + 1) - 1 + start_idx
+                        if not (pair_from, pair_to) in row_col:
+                            row_col.append((pair_from, pair_to))
+                            link.append(3)
+                            prob.append(probability)
+                            norm.append(1)
+                            local_idx.append((pair_from, pair_to))
+                            # symmetric
+                            row_col.append((pair_to, pair_from))
+                            link.append(4)
+                            prob.append(probability)
+                            norm.append(1)
+                        else:
+                            idx = row_col.index((pair_from, pair_to))
+                            prob[idx] += probability
+                            prob[idx+1] += probability
+                            if not (pair_from, pair_to) in local_idx:
+                                local_idx.append((pair_from, pair_to))
+                                norm[idx] += 1
+                                norm[idx+1] += 1
+
+    prob = np.array(prob) / np.array(norm)
+    print(norm)
+    return (sp.csr_matrix((link, (np.array(row_col)[:, 0], np.array(row_col)[:, 1])), shape=(length, length)),
+            sp.csr_matrix((prob, (np.array(row_col)[:, 0], np.array(row_col)[:, 1])), shape=(length, length)),)
+
+
+
+
+# >>>> equilibrium probability using RNAplfold >>>>>>>
 
 def fold_seq_rnaplfold(seq, w, l, cutoff, no_lonely_bps):
     np.random.seed(random.seed())
@@ -87,10 +153,9 @@ def fold_seq_rnaplfold(seq, w, l, cutoff, no_lonely_bps):
             sp.csr_matrix((prob, (np.array(row_col)[:, 0], np.array(row_col)[:, 1])), shape=(length, length)),)
 
 
-'''
-Boltzmann sampling using RNAsubopt
-'''
 
+
+# >>>> Boltzmann sampling using RNAsubopt >>>>>>>
 
 def sample_one_seq(seq, passes=10):
     max_len = len(seq)
@@ -217,10 +282,9 @@ def adj_mat_subopt(struct_list, probabilistic):
                              shape=(length, length))
 
 
-'''
-MFE structure using RNAfold
-'''
 
+
+# >>>> MFE structure using RNAfold >>>>>>>
 
 def fold_seq_rnafold(seq):
     '''fold sequence using RNAfold'''
@@ -594,10 +658,14 @@ def generate_element_dataset(n, length, element_symbol, p=None, return_label=Tru
 if __name__ == "__main__":
     np.set_printoptions(threshold=np.inf, edgeitems=30, linewidth=100000, )
 
-    res = fold_seq_rnaplfold(
-        'TGTGAAGCGCGGCTAGCTGCCGGGGTTCGAGGTGGGTCCCAGGGTTAAAATCCCTTGTTGTCTTACTGGTGGCAGCAAGCTAGGACTATACTCCTCGGTCG',
-        101, 101, 0.0001, True)
-    print(res[0].todense())
+    # res = fold_seq_rnaplfold(
+    #     'cgcgggacgcggcccgaggccgtgcgcgagccggggcaccgggcggcggcggcggcggcgcgcgccatgtcgttcagtgaaatgaaccgcaggacgctggcgttccgaggaggcgggttggtcaccgctagcggcggcggctccacgaacAATAACGCTGGCGGGGAGGCCTCAGcttggcctccgcagccccagccgagacagcccccgccgccagcgccgcccgcgcttcagccgcctaatgggcggggggccgacgaggaagtggaattggagggcctggagccccaagacctggaggcctccgccgggccggccgccggcg',
+    #     150, 150, 0.0001, True)
+    # print(res[1].todense().sum(axis=-1))
+    res = fold_seq_rnashapes(
+        'cgcgggacgcggcccgaggccgtgcgcgagccggggcaccgggcggcggcggcggcggcgcgcgccatgtcgttcagtgaaatgaaccgcaggacgctggcgttccgaggaggcgggttggtcaccgctagcggcggcggctccacgaacAATAACGCTGGCGGGGAGGCCTCAGcttggcctccgcagccccagccgagacagcccccgccgccagcgccgcccgcgcttcagccgcctaatgggcggggggccgacgaggaagtggaattggagggcctggagccccaagacctggaggcctccgccgggccggccgccggcg',
+        150, iterations=100)
+    # print(res[0].todense())
     print(res[1].todense().sum(axis=-1))
 
     # with open('boltzmann-sampling-acc.txt', 'w') as file:

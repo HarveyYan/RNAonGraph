@@ -81,7 +81,9 @@ def Logger(q):
     import time
     all_auc = []
     registered_gpus = {}
-    logger = lib.logger.CSVLogger('results.csv', output_dir, ['fold', 'nuc_acc', 'pos_acc', 'seq_acc', 'auc'])
+    logger = lib.logger.CSVLogger('results.csv', output_dir,
+                                  ['fold', 'seq_acc', 'gnn_pos_acc', 'bilstm_pos_acc',
+                                   'gnn_nuc_acc', 'bilstm_nuc_acc', 'auc'])
     while True:
         msg = q.get()
         print(msg)
@@ -165,9 +167,11 @@ def run_one_rbp(idx, q):
     reload(lib.logger)
     q.put({
         'fold': idx,
-        'pos_acc': acc[0],
-        'seq_acc': acc[1],
-        'nuc_acc': acc[2],
+        'seq_acc': acc[0],
+        'gnn_pos_acc': acc[1],
+        'bilstm_pos_acc': acc[2],
+        'gnn_nuc_acc': acc[3],
+        'bilstm_nuc_acc': acc[4],
         'auc': auc
     })
 
