@@ -230,8 +230,7 @@ class JSMRGCN:
                     labels=tf.one_hot(self.labels, depth=2),
                 )) / tf.cast(tf.reduce_sum(self.segment_length), tf.float32)
 
-        self.cost = self.mixing_ratio * self.graph_cost + (1. - self.mixing_ratio) * \
-                    (self.gnn_nuc_cost + self.bilstm_nuc_cost)
+        self.cost = self.mixing_ratio * self.graph_cost + (1. - self.mixing_ratio) * self.bilstm_nuc_cost
 
     def _train(self):
         self.gv = self.optimizer.compute_gradients(self.cost,
@@ -315,7 +314,7 @@ class JSMRGCN:
         merge sparse submatrices
         '''
         all_tensors = []
-        for i in [0, 2]:
+        for i in [0, 2]:  # forward_covalent, forward_hydrogen
             all_data, all_row_col = [], []
             size = 0
             for _data, _row_col, _segment in zip(data, row_col, segments):
@@ -454,7 +453,7 @@ class JSMRGCN:
             lib.plot.flush()
             lib.plot.tick()
 
-            if dev_cost[0] < best_dev_cost:
+            if dev_cost[0] < best_dev_cost and epoch - epoch_to_start >= 10:  # unstable loss in the beginning
                 best_dev_cost = dev_cost[0]
                 save_path = self.saver.save(self.sess, checkpoints_dir, global_step=epoch)
                 print('Validation sample cost improved. Saved to path %s\n' % (save_path), flush=True)
