@@ -36,11 +36,28 @@ def conv1d(name, input_dim, output_dim, filter_size, inputs, stride=1, he_init=T
             filters = tf.get_variable('filters', shape=(filter_size, input_dim, output_dim),
                                       initializer=uniform_init(filters_stdev))
 
+        '''
+        use mirror-padding on the spatial axis, rank of inputs would be 3, SAME padding mode
+        1 2 3 4 5 6 7 # # #
+        1 1 1 1
+            1 1 1 1
+                1 1 1 1
+                    1 1 1 1
+        output_length = (length - F + P) // stride + 1
+        '''
+        if pad_mode == 'SAME':
+            length = tf.shape(inputs)[1]
+            output_length = (length + stride - 1) // stride
+            num_paddings = (output_length - 1)*stride + filter_size - length
+            left_paddings = num_paddings
+            right_paddings = 0
+            inputs = tf.pad(inputs, [[0, 0], [left_paddings, right_paddings], [0, 0]], mode="CONSTANT")
+
         result = tf.nn.conv1d(
             value=inputs,
             filters=filters,
             stride=stride,
-            padding=pad_mode,
+            padding='VALID',
             # dilations=dilation
         )
 
