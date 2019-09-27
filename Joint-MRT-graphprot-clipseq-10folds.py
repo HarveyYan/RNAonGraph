@@ -135,7 +135,7 @@ def run_one_rbp(idx, q):
 
     test_data = [dataset['seq'][test_idx], dataset['segment_size'][test_idx]]
     cost, acc, auc = model.evaluate(test_data, dataset['label'][test_idx], BATCH_SIZE)
-    print('Evaluation (with masking) on held-out test set, acc: %.3f, auc: %.3f' % (acc, auc))
+    print('Evaluation (with masking) on held-out test set, acc: %s, auc: %.3f' % (acc, auc))
 
     model.delete()
     reload(lib.plot)
@@ -143,8 +143,8 @@ def run_one_rbp(idx, q):
     q.put({
         'fold': idx,
         'seq_acc': acc[0],
-        'bilstm_pos_acc': acc[2],
-        'bilstm_nuc_acc': acc[4],
+        'bilstm_pos_acc': acc[1],
+        'bilstm_nuc_acc': acc[2],
         'auc': auc
     })
 

@@ -55,6 +55,7 @@ class JSMRGCN:
                     1e-4,
                     learning_rate=self.learning_rate * self.lr_multiplier
                 )
+                # from lib.AMSGrad import AMSGrad
                 # self.optimizer = AMSGrad(
                 #     learning_rate=self.learning_rate * self.lr_multiplier,
                 #     beta2=0.999
