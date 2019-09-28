@@ -26,7 +26,7 @@ tf.app.flags.DEFINE_bool('use_attention', False, '')
 tf.app.flags.DEFINE_bool('expr_simplified_attention', False, '')
 tf.app.flags.DEFINE_bool('lstm_ggnn', True, '')
 tf.app.flags.DEFINE_bool('use_embedding', False, '')
-tf.app.flags.DEFINE_integer('nb_layers', 40, '')
+tf.app.flags.DEFINE_integer('nb_layers', 10, '')
 tf.app.flags.DEFINE_bool('probabilistic', True, '')
 tf.app.flags.DEFINE_string('fold_algo', 'rnaplfold', '')
 # major changes !

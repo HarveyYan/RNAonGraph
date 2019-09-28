@@ -120,7 +120,6 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
     else:
         pool = p
 
-    fold_algo = kwargs.get('fold_algo', 'rnafold')
     probabilistic = kwargs.get('probabilistic', False)
     load_mat = kwargs.get('load_mat', True)
     nucleotide_label = kwargs.get('nucleotide_label', False)
@@ -168,28 +167,28 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
                 if i < size_pos:
                     all_label.append((np.array(list(seq)) <= 'Z').astype(np.int32))
                 else:
-                    all_label.append(np.array([0]*len(seq)))
+                    all_label.append(np.array([0] * len(seq)))
             dataset['label'] = np.array(all_label)
         else:
             dataset['label'] = np.array([1] * len(pos_id) + [0] * (len(neg_id)))
 
-
         all_seq = [seq.upper().replace('U', 'T') for seq in all_seq]
 
         use_embedding = kwargs.get('use_embedding', False)
-        kmer_len = kwargs.get('kmer_len', 3)
-        window = kwargs.get('window', 12)
-        emb_size = kwargs.get('emb_size', 50)
+        kmer_len = kwargs.get('kmer_len', 6)
+        window = kwargs.get('window', 5)
+        emb_size = kwargs.get('emb_size', 25)
         if use_embedding:
-            path = os.path.join(basedir, os.path.dirname(path_template).format(rbp, 'train', 'word2vec_%d_%d_%d.obj' % (
+            path = os.path.join(basedir, 'Data/misc/{}'.format('word2vec_%d_%d_%d.obj' % (
                 kmer_len, window, emb_size)))
             if not os.path.exists(path):
-                pretrain_word2vec(all_seq, kmer_len, window, emb_size, path)
+                tmp_seqs = lib.rna_utils.load_seq(os.path.join(basedir, 'Data/misc/utrs.fa'))[1]
+                pretrain_word2vec(tmp_seqs, kmer_len, window, emb_size, path)
             word2vec_model = Word2Vec.load(path)
             VOCAB = ['NOT_FOUND'] + list(word2vec_model.wv.vocab.keys())
             VOCAB_VEC = np.concatenate([np.zeros((1, emb_size)).astype(np.float32), word2vec_model.wv.vectors], axis=0)
             kmers = get_kmers(all_seq, kmer_len)
-            dataset['seq'] = np.array([[VOCAB.index(c) for c in seq] for seq in kmers])
+            dataset['seq'] = np.array([[VOCAB.index(c) if c in VOCAB else 0 for c in seq] for seq in kmers])
         else:
             VOCAB = ['NOT_FOUND', 'A', 'C', 'G', 'T']
             VOCAB_VEC = np.array([[0, 0, 0, 0], [1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]).astype(
@@ -219,25 +218,23 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
 
 def get_kmers(seqs, kmer_len):
     sentence = []
-    left = kmer_len // 2
-    right = kmer_len - left
     for seq in seqs:
         kmers = []
-        length = len(seq)
-        seq = 'N' * left + seq + 'N' * (right - 1)
-        for j in range(left, left + length):
-            kmers.append(seq[j - left: j + right])
+        seq = 'N'*(kmer_len-1)+seq
+        for i in range(len(seq) - kmer_len + 1):
+            kmers.append(seq[i:i + kmer_len])
         sentence.append(kmers)
     return sentence
 
 
 def pretrain_word2vec(seqs, kmer_len, window, embedding_size, save_path):
+    # use skip grams and negative sampling of 5
     print('word2vec pretaining')
     sentence = get_kmers(seqs, kmer_len)
     model = Word2Vec(sentence, window=window, size=embedding_size,
-                     min_count=0, workers=15)
+                     min_count=5, workers=15, sg=1, iter=5, batch_words=1000)
     # to capture as much dependency as possible
-    model.train(sentence, total_examples=len(sentence), epochs=100)
+    model.train(sentence, total_examples=len(sentence), epochs=model.iter)
     model.save(save_path)
 
 

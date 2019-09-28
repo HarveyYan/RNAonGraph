@@ -13,6 +13,7 @@ from lib.rgcn_utils import normalize
 import lib.plot, lib.logger, lib.clr
 import lib.ops.LSTM, lib.ops.Linear, lib.ops.Conv1D
 from lib.tf_ghm_loss import get_ghm_weights
+from lib.AMSGrad import AMSGrad
 
 
 class JMRT:
@@ -45,9 +46,13 @@ class JMRT:
                     0.9, use_nesterov=True
                 )
             else:
-                self.optimizer = tf.contrib.opt.AdamWOptimizer(
-                    1e-4,
-                    learning_rate=self.learning_rate * self.lr_multiplier
+                # self.optimizer = tf.contrib.opt.AdamWOptimizer(
+                #     1e-4,
+                #     learning_rate=self.learning_rate * self.lr_multiplier
+                # )
+                self.optimizer = AMSGrad(
+                    learning_rate=self.learning_rate * self.lr_multiplier,
+                    beta2=0.999
                 )
 
             with tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):

@@ -2,7 +2,7 @@ import os
 import numpy as np
 import pandas as pd
 from lib.logger import CSVLogger
-from lib.general_utils import compare_two_csvs
+import argparse
 
 def summarize_10fold_results(path, outfile_name):
     logger = CSVLogger(outfile_name, path, ['RBP', 'acc', 'acc_std', 'auc', 'auc_std'])
@@ -13,11 +13,11 @@ def summarize_10fold_results(path, outfile_name):
                 try:
                     file = pd.read_csv(os.path.join(path, rbp_dir, 'results.csv'))
                 except pd.errors.EmptyDataError:
-                    print(rbp_name, 'has lagged behind considerably')
+                    print(rbp_name, 'has no results')
                     continue
-                acc, auc = list(file['acc']), list(file['auc'])
-                if len(acc) != 10:
-                    print(rbp_name, 'hasn\'t yet reached 10 folds')
+                acc, auc = list(file['seq_acc']), list(file['auc'])
+                if len(acc) < 10:
+                    print(rbp_name, 'lacks %d folds'%(10-len(acc)))
                 logger.update_with_dict({
                     'RBP': rbp_name,
                     'acc': np.round(np.mean(acc), 3),
@@ -26,10 +26,13 @@ def summarize_10fold_results(path, outfile_name):
                     'auc_std': np.round(np.std(auc), 3)
                 })
             else:
-                print(rbp_name)
+                print(rbp_name, 'has no results')
     logger.close()
 
 if __name__ == "__main__":
-    summarize_10fold_results('output/SMRGCN-Graphprot', 'rnaplfold-results.csv')
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--path", default=None, type=str, help="")
+    args = parser.parse_args()
+    summarize_10fold_results(args.path, 'rnaplfold-results.csv')
 
 
