@@ -12,6 +12,10 @@ class CSVLogger:
         self.writer.writerow(dict_entries)
         self.log_file.flush()
 
+    def update_with_dicts(self, dict_entries):
+        self.writer.writerows(dict_entries)
+        self.log_file.flush()
+
     def close(self):
         del self.writer
         self.log_file.close()

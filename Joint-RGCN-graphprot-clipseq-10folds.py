@@ -203,12 +203,45 @@ if __name__ == "__main__":
                                                fold_algo=FLAGS.fold_algo, force_folding=FLAGS.force_folding,
                                                probabilistic=FLAGS.probabilistic, w=FLAGS.folding_winsize,
                                                nucleotide_label=True)[0]  # load one at a time
-    np.save(os.path.join(output_dir, 'splits.npy'), dataset['splits'])
+    if TRAIN_RBP_ID == 'CLIPSEQ_AGO2':
+        dataset['splits'] = np.load(
+            'output/Joint-SMRGCN-Graphprot/20191004-022737-AMSGrad-mr0.05-l10-e200-win150-ghm-10-0.75-BCE-only-CLIPSEQ_AGO2/splits.npy',
+            allow_pickle=True)
+        all_folds = list(range(4, 10))
+    elif TRAIN_RBP_ID == 'ICLIP_TIAL1':
+        dataset['splits'] = np.load(
+            'output/Joint-SMRGCN-Graphprot/20191004-023355-AMSGrad-mr0.05-l10-e200-win150-ghm-10-0.75-BCE-only-ICLIP_TIAL1/splits.npy',
+            allow_pickle=True)
+        all_folds = [8, 9]
+    elif TRAIN_RBP_ID == 'PARCLIP_AGO1234':
+        dataset['splits'] = np.load(
+            'output/Joint-SMRGCN-Graphprot/20191004-023533-AMSGrad-mr0.05-l10-e200-win150-ghm-10-0.75-BCE-only-PARCLIP_AGO1234/splits.npy',
+            allow_pickle=True)
+        all_folds = [8, 9]
+    elif TRAIN_RBP_ID == 'PTBv1':
+        dataset['splits'] = np.load(
+            'output/Joint-SMRGCN-Graphprot/20191004-024840-AMSGrad-mr0.05-l10-e200-win150-ghm-10-0.75-BCE-only-PTBv1/splits.npy',
+            allow_pickle=True)
+        all_folds = [8, 9]
+    elif TRAIN_RBP_ID == 'ICLIP_TDP43':
+        dataset['splits'] = np.load(
+            'output/Joint-SMRGCN-Graphprot/20191005-031423-AMSGrad-mr0.05-l10-e100-win150-ghm-10-0.75-BCE-only-ICLIP_TDP43/splits.npy',
+            allow_pickle=True)
+        all_folds = [8, 9]
+    elif TRAIN_RBP_ID == 'PARCLIP_HUR':
+        dataset['splits'] = np.load(
+            'output/Joint-SMRGCN-Graphprot/20191005-062028-AMSGrad-mr0.05-l10-e100-win150-ghm-10-0.75-BCE-only-PARCLIP_HUR/splits.npy',
+            allow_pickle=True)
+        all_folds = [1, 2, 4, 5, 6, 7, 8, 9]
+    else:
+        np.save(os.path.join(output_dir, 'splits.npy'), dataset['splits'])
+        all_folds = list(range(len(dataset['splits'])))
+
     manager = mp.Manager()
     q = manager.Queue()
     pool = Pool(FLAGS.parallel_processes + 1)
     logger_thread = pool.apply_async(Logger, (q,))
-    pool.map(functools.partial(run_one_rbp, q=q), list(range(len(dataset['splits']))), chunksize=1)
+    pool.map(functools.partial(run_one_rbp, q=q), all_folds, chunksize=1)
 
     q.put('kill')  # terminate logger thread
     pool.close()

@@ -52,10 +52,6 @@ class JSMRGCN:
                     0.9, use_nesterov=True
                 )
             else:
-                # self.optimizer = tf.contrib.opt.AdamWOptimizer(
-                #     1e-4,
-                #     learning_rate=self.learning_rate * self.lr_multiplier
-                # )
                 self.optimizer = AMSGrad(
                     learning_rate=self.learning_rate * self.lr_multiplier,
                     beta2=0.999
@@ -98,7 +94,7 @@ class JSMRGCN:
         embedding = tf.get_variable('embedding_layer', shape=(self.vocab_size, self.node_dim),
                                     initializer=tf.constant_initializer(self.embedding_vec), trainable=False)
         node_tensor = tf.nn.embedding_lookup(embedding, self.node_input_ph)
-
+        self.node_tensor = node_tensor
         if self.reuse_weights:
             if self.node_dim < self.units:
                 node_tensor = tf.pad(node_tensor,
