@@ -305,7 +305,7 @@ class MaskRNATracker:
 
             feed_dict = {
                 self.node_input_ph: np.concatenate(_node_tensor, axis=0),
-                self.labels: _labels,
+                self.labels: np.array([np.max(l) for l in _labels]),
                 self.max_len: max(_segment),
                 self.segment_length: _segment,
                 self.is_training_ph: False

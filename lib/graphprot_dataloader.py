@@ -15,8 +15,6 @@ from lib.general_utils import Pool
 
 clip_data_path = os.path.join(basedir, 'Data', 'GraphProt_CLIP_sequences')
 all_rbps = [dir for dir in os.listdir(clip_data_path) if os.path.isdir(os.path.join(clip_data_path, dir))]
-# rbp, split, label
-path_template = os.path.join(basedir, 'Data', 'GraphProt_CLIP_sequences', '{}', '{}', '{}', 'data.fa')
 
 BOND_TYPE = {
     0: 'No Bond',
@@ -43,34 +41,6 @@ def _initialize():
                         os.rename(path_template.format(rbp, split, label), os.path.join(dir_to, 'data.fa'))
 
         __reorganize_dir()
-
-
-# def _merge_sparse_submatrices(data, row_col, segments):
-#     '''
-#     merge sparse submatrices
-#     '''
-#     all_tensors = []
-#     for i in range(4):
-#         all_data, all_row_col = [], []
-#         size = 0
-#         for _data, _row_col, _segment in zip(data, row_col, segments):
-#             all_data.append(_data[i])
-#             all_row_col.append(np.array(_row_col[i]) + size)
-#             size += _segment
-#         all_tensors.append(
-#             tf.compat.v1.SparseTensorValue(
-#                 np.concatenate(all_row_col),
-#                 np.concatenate(all_data),
-#                 (size, size)
-#             )
-#         )
-#     # return 4 matrices, one for each relation, max_len and segment_length
-#     return all_tensors
-#
-#
-# def dataset_map_function(X, y):
-#     all_tensors = _merge_sparse_submatrices(*X)
-#     return all_tensors, y
 
 
 def split_matrix_by_relation(mat):
@@ -128,12 +98,75 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
 
     rbp_list = all_rbps if rbp_list is None else rbp_list
     for rbp in rbp_list:
+        # rbp, split, label
+        path_template = os.path.join(basedir, 'Data', 'GraphProt_CLIP_sequences', '{}', '{}', '{}', 'data.fa')
         dataset = {}
 
         pos_id, pos_seq = lib.rna_utils.load_seq(path_template.format(rbp, 'train', 'positives'))
         neg_id, neg_seq = lib.rna_utils.load_seq(path_template.format(rbp, 'train', 'negatives'))
         all_id = pos_id + neg_id
         all_seq = pos_seq + neg_seq
+
+        if nucleotide_label:
+            size_pos = len(pos_id)
+            # nucleotide level label
+            all_label = []
+            for i, seq in enumerate(all_seq):
+                if i < size_pos:
+                    all_label.append((np.array(list(seq)) <= 'Z').astype(np.int32))
+                else:
+                    all_label.append(np.array([0] * len(seq)))
+            dataset['label'] = np.array(all_label)
+        else:
+            dataset['label'] = np.array([1] * len(pos_id) + [0] * (len(neg_id)))
+
+        if kwargs.get('modify_leaks', False):
+            path_template = path_template[:-7] + 'modified_data.fa'
+            if not os.path.exists(path_template.format(rbp, 'train', 'positives')) or \
+                    not os.path.exists(path_template.format(rbp, 'train', 'negatives')):
+                all_modified_seq = []
+                for seq, label in zip(all_seq, dataset['label']):
+                    seq = list(seq)
+                    if np.max(label) == 1:
+                        pos_idx = np.where(np.array(label) == 1)[0]
+                    else:
+                        pos_idx = np.where((np.array(seq) <= 'Z').astype(np.int32) == 1)[0]
+
+                    if rbp == 'CAPRIN1_Baltz2012':
+                        indices = [pos_idx[-1], pos_idx[0] + 1, pos_idx[0], pos_idx[0] - 1]
+                    elif rbp == 'CAPRIN1_Baltz2012':
+                        indices = [pos_idx[-1], pos_idx[-1] - 1, pos_idx[0] + 1, pos_idx[0], pos_idx[0] - 1]
+                    elif rbp == 'PARCLIP_PUM2':
+                        indices = [pos_idx[-1], pos_idx[0] - 1]
+                    else:
+                        raise ValueError('TODO: modify_leaks option has not been made available for %s' % (rbp))
+
+                    for idx in indices:
+                        try:
+                            seq[idx] = np.random.choice(['A', 'C', 'G', 'T'])
+                        except IndexError:
+                            pass
+                    all_modified_seq.append(''.join(seq))
+
+                all_seq = all_modified_seq
+                pos_seq = all_seq[:len(pos_id)]
+                neg_seq = all_seq[len(pos_id):]
+
+                # cache temporary modified files
+                with open(path_template.format(rbp, 'train', 'positives'), 'w') as file:
+                    for id, seq in zip(pos_id, pos_seq):
+                        file.write('%s\n%s\n' % (id, seq))
+                with open(path_template.format(rbp, 'train', 'negatives'), 'w') as file:
+                    for id, seq in zip(neg_id, neg_seq):
+                        file.write('%s\n%s\n' % (id, seq))
+                print('modified sequences have been cached')
+            else:
+                _, pos_seq = lib.rna_utils.load_seq(path_template.format(rbp, 'train', 'positives'))
+                _, neg_seq = lib.rna_utils.load_seq(path_template.format(rbp, 'train', 'negatives'))
+                all_seq = pos_seq + neg_seq
+
+        # in nucleotide format
+        dataset['raw_seq'] = np.array(all_seq)
 
         if load_mat:
             # load sparse matrices
@@ -159,18 +192,12 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
             dataset['all_row_col'] = all_row_col
             dataset['segment_size'] = segment_size
 
-        if nucleotide_label:
-            size_pos = len(pos_id)
-            # nucleotide level label
-            all_label = []
-            for i, seq in enumerate(all_seq):
-                if i < size_pos:
-                    all_label.append((np.array(list(seq)) <= 'Z').astype(np.int32))
-                else:
-                    all_label.append(np.array([0] * len(seq)))
-            dataset['label'] = np.array(all_label)
-        else:
-            dataset['label'] = np.array([1] * len(pos_id) + [0] * (len(neg_id)))
+        # to ensure segment_size is always included
+        if 'segment_size' not in dataset:
+            dataset['segment_size'] = np.array([len(seq) for seq in all_seq])
+
+        if kwargs.get('truncate_test', False):
+            raise ValueError('truncate_test option is no longer supported at the data loading phase!')
 
         all_seq = [seq.upper().replace('U', 'T') for seq in all_seq]
 
@@ -195,13 +222,19 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
                 np.float32)
             dataset['seq'] = np.array([[VOCAB.index(c) for c in seq] for seq in all_seq])
 
-        # to ensure segment_size is always included
-        if 'segment_size' not in dataset:
-            dataset['segment_size'] = np.array([len(seq) for seq in dataset['seq']])
+        if kwargs.get('permute', False):
+            permute = np.random.permutation(len(all_id))
+            dataset['label'] = dataset['label'][permute]
+            dataset['seq'] = dataset['seq'][permute]
+            dataset['segment_size'] = dataset['segment_size'][permute]
+            if 'all_data' in dataset:
+                dataset['all_data'] = dataset['all_data'][permute]
+                dataset['all_row_col'] = dataset['all_row_col'][permute]
 
         # only using nucleotide information
         dataset['VOCAB'] = VOCAB
         dataset['VOCAB_VEC'] = VOCAB_VEC
+        dataset['id'] = np.array(all_id)
 
         kf = KFold(n_splits=10, shuffle=True)
         splits = kf.split(all_id)
@@ -220,7 +253,7 @@ def get_kmers(seqs, kmer_len):
     sentence = []
     for seq in seqs:
         kmers = []
-        seq = 'N'*(kmer_len-1)+seq
+        seq = 'N' * (kmer_len - 1) + seq
         for i in range(len(seq) - kmer_len + 1):
             kmers.append(seq[i:i + kmer_len])
         sentence.append(kmers)
@@ -238,8 +271,36 @@ def pretrain_word2vec(seqs, kmer_len, window, embedding_size, save_path):
     model.save(save_path)
 
 
+def test_overlapping(id_list_1, id_list_2):
+    identity_list_1, identity_list_2 = [], []
+    for _id in id_list_1:
+        identity_list_1.append(_id.rstrip().split(';')[-1].split(','))
+    for _id in id_list_2:
+        identity_list_2.append(_id.rstrip().split(';')[-1].split(','))
+
+    overlapping = 0
+    for identity_1 in identity_list_1:
+        for identity_2 in identity_list_2:
+            if identity_1[0] == identity_2[0] and \
+                    identity_1[-1] == identity_2[-1] and \
+                    not (identity_1[2] < identity_2[1] or identity_2[2] < identity_1[1]):
+                overlapping += 1
+
+    print('id_list_1 in id_list_2: %d/%d' % (overlapping, len(identity_list_2)))
+
+    overlapping = 0
+    for identity_2 in identity_list_2:
+        for identity_1 in identity_list_1:
+            if identity_2[0] == identity_1[0] and \
+                    identity_2[-1] == identity_2[-1] and \
+                    not (identity_1[2] < identity_2[1] or identity_2[2] < identity_1[1]):
+                overlapping += 1
+
+    print('id_list_2 in id_list_1: %d/%d' % (overlapping, len(identity_list_1)))
+
+
 if __name__ == "__main__":
-    for i, rbp in enumerate(all_rbps):
-        if i < 6:
-            continue
-        load_clip_seq([rbp], fold_algo='rnaplfold', probabilistic=True)
+    load_clip_seq(['CAPRIN1_Baltz2012'], use_embedding=False,
+                  fold_algo='rnaplfold',
+                  probabilistic=True, w=150,
+                  nucleotide_label=True, modify_leaks=True)[0]  # load one at a time

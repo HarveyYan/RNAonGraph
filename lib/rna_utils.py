@@ -27,8 +27,6 @@ def adj_to_bias(adj, nhood=1):
     return -1e9 * (1.0 - mt)
 
 
-
-
 # >>>> equilibrium probability using RNAplfold >>>>>>>
 
 def fold_seq_rnashapes(seq, winsize, iterations=100):
@@ -82,18 +80,16 @@ def fold_seq_rnashapes(seq, winsize, iterations=100):
                         else:
                             idx = row_col.index((pair_from, pair_to))
                             prob[idx] += probability
-                            prob[idx+1] += probability
+                            prob[idx + 1] += probability
                             if not (pair_from, pair_to) in local_idx:
                                 local_idx.append((pair_from, pair_to))
                                 norm[idx] += 1
-                                norm[idx+1] += 1
+                                norm[idx + 1] += 1
 
     prob = np.array(prob) / np.array(norm)
     print(norm)
     return (sp.csr_matrix((link, (np.array(row_col)[:, 0], np.array(row_col)[:, 1])), shape=(length, length)),
             sp.csr_matrix((prob, (np.array(row_col)[:, 0], np.array(row_col)[:, 1])), shape=(length, length)),)
-
-
 
 
 # >>>> equilibrium probability using RNAplfold >>>>>>>
@@ -146,8 +142,6 @@ def fold_seq_rnaplfold(seq, w, l, cutoff, no_lonely_bps):
     # placeholder for dot-bracket structure
     return (sp.csr_matrix((link, (np.array(row_col)[:, 0], np.array(row_col)[:, 1])), shape=(length, length)),
             sp.csr_matrix((prob, (np.array(row_col)[:, 0], np.array(row_col)[:, 1])), shape=(length, length)),)
-
-
 
 
 # >>>> Boltzmann sampling using RNAsubopt >>>>>>>
@@ -277,8 +271,6 @@ def adj_mat_subopt(struct_list, probabilistic):
                              shape=(length, length))
 
 
-
-
 # >>>> MFE structure using RNAfold >>>>>>>
 
 def fold_seq_rnafold(seq):
@@ -367,8 +359,12 @@ def load_mat(filepath, pool=None, fold_algo='rnafold', probabilistic=False, **kw
     # folding length is crucial hyperparam for local RNA folding, therefore should be marked
     if fold_algo == 'rnaplfold' or fold_algo == 'rnashapes':
         prefix += '%d_' % (kwargs.get('w', 150))
-    force_folding = kwargs.get('force_folding', False)
-    if force_folding or not os.path.exists(
+    if kwargs.get('modify_leaks', False):
+        # this will make sure we load the modified sequences
+        # incorrect secondary structure may still give away information / data statistics
+        prefix = 'modified_' + prefix
+
+    if not os.path.exists(
             os.path.join(os.path.dirname(filepath), '{}rel_mat.obj'.format(prefix))) or probabilistic and \
             not os.path.exists(os.path.join(os.path.dirname(filepath), '{}prob_mat.obj'.format(prefix))):
         print('adj mat or prob mat is missing. Begin folding from scratch.')
@@ -418,6 +414,8 @@ def fold_rna_from_file(filepath, p=None, fold_algo='rnafold', probabilistic=Fals
     prefix = '%s_%s_' % (fold_algo, probabilistic)
     if fold_algo == 'rnaplfold' or fold_algo == 'rnashapes':
         prefix += '%d_' % (kwargs.get('w', 150))
+    if kwargs.get('modify_leaks', False):
+        prefix = 'modified_' + prefix
 
     if p is None:
         pool = Pool(int(os.cpu_count() * 2 / 3))

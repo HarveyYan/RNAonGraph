@@ -78,7 +78,7 @@ def compare_two_csvs(path_to_csv_1, path_to_csv_2, experiment, axis_name_1, axis
     plt.savefig('../Graph/%s.png' % (experiment), dpi=300)
 
 
-def wilcoxon_test(path_to_csv_1, path_to_csv_2, roundto=3):
+def wilcoxon_test(path_to_csv_1, path_to_csv_2, roundto=3, entry_name='auc'):
     file1 = pd.read_csv(path_to_csv_1)
     file2 = pd.read_csv(path_to_csv_2)
 
@@ -89,8 +89,8 @@ def wilcoxon_test(path_to_csv_1, path_to_csv_2, roundto=3):
     )
     file2 = file2.sort_values('RBP')
 
-    auc_1 = np.array(file1['auc'][:len(file2['auc'])]).round(roundto)
-    auc_2 = np.array(file2['auc']).round(roundto)
+    auc_1 = np.array(file1[entry_name][:len(file2[entry_name])]).round(roundto)
+    auc_2 = np.array(file2[entry_name]).round(roundto)
     return wilcoxon(auc_2 - auc_1, alternative='greater')
 
 
@@ -115,10 +115,10 @@ if __name__ == "__main__":
     #     '../output/Joint-SMRGCN-GraphProt/JSMRGCN-results.csv',
     #     'ideepv vs GNN-Joint', 'ideepv', 'GNN-Joint')
 
-    compare_two_csvs(
-        '../output/Joint-MRT-GraphProt/MRT-results.csv',
-        '../output/Joint-SMRGCN-GraphProt/JSMRGCN-results.csv',
-        '(Alignment ACC) CNN-Joint vs GNN-Joint', 'CNN-Joint', 'GNN-Joint', entry_name='pos_acc')
+    # compare_two_csvs(
+    #     '../output/Joint-MRT-GraphProt/MRT-results.csv',
+    #     '../output/Joint-SMRGCN-GraphProt/JSMRGCN-results.csv',
+    #     '(Alignment ACC) CNN-Joint vs GNN-Joint', 'CNN-Joint', 'GNN-Joint', entry_name='pos_acc')
 
     print('CNN vs CNN-Joint\n',
           wilcoxon_test('../output/RNATracker-GraphProt/RT-results.csv',
@@ -127,6 +127,10 @@ if __name__ == "__main__":
     print('CNN-Joint vs GNN-Joint\n',
           wilcoxon_test('../output/Joint-MRT-GraphProt/MRT-results.csv',
                         '../output/Joint-SMRGCN-GraphProt/JSMRGCN-results.csv'))
+
+    print('(ACC Alignment) CNN-Joint vs GNN-Joint\n',
+          wilcoxon_test('../output/Joint-MRT-GraphProt/MRT-results.csv',
+                        '../output/Joint-SMRGCN-GraphProt/JSMRGCN-results.csv', entry_name='pos_acc'))
 
     print('mDBN vs GNN-Joint\n',
           wilcoxon_test('../output/mdbn-results.csv',

@@ -14,13 +14,13 @@ from Model.Joint_SMRGCN import JSMRGCN
 
 tf.logging.set_verbosity(tf.logging.FATAL)
 tf.app.flags.DEFINE_string('output_dir', '', '')
-tf.app.flags.DEFINE_integer('epochs', 200, '')
+tf.app.flags.DEFINE_integer('epochs', 400, '')
 tf.app.flags.DEFINE_list('gpu_device', '0,1', '')
 tf.app.flags.DEFINE_bool('use_clr', True, '')
 tf.app.flags.DEFINE_bool('use_momentum', False, '')
-tf.app.flags.DEFINE_integer('parallel_processes', 1, '')
+tf.app.flags.DEFINE_integer('parallel_processes', 2, '')
 tf.app.flags.DEFINE_integer('batch_size', 128, '')
-tf.app.flags.DEFINE_bool('share_device', False, '')
+tf.app.flags.DEFINE_bool('share_device', True, '')
 # some experiment settings
 tf.app.flags.DEFINE_bool('use_attention', False, '')
 tf.app.flags.DEFINE_bool('expr_simplified_attention', False, '')
@@ -31,12 +31,13 @@ tf.app.flags.DEFINE_bool('probabilistic', True, '')
 tf.app.flags.DEFINE_string('fold_algo', 'rnaplfold', '')
 # major changes !
 tf.app.flags.DEFINE_string('train_rbp_id', 'PARCLIP_PUM2', '')
-tf.app.flags.DEFINE_bool('force_folding', False, '')
 
 tf.app.flags.DEFINE_float('mixing_ratio', 0.05, '')
 tf.app.flags.DEFINE_integer('folding_winsize', 150, '')
 tf.app.flags.DEFINE_bool('use_ghm', False, '')
 FLAGS = tf.app.flags.FLAGS
+
+# TODO, use a configuration file as we are having an exploding amount of hyper-params!
 
 assert (FLAGS.fold_algo in ['rnafold', 'rnasubopt', 'rnaplfold'])
 if FLAGS.fold_algo == 'rnafold':
@@ -151,14 +152,14 @@ def run_one_rbp(idx, q):
                     # excluding no bond
                     dataset['VOCAB_VEC'], device, **hp)
 
-    train_data = [dataset['seq'][train_idx], dataset['all_data'][train_idx],
-                  dataset['all_row_col'][train_idx], dataset['segment_size'][train_idx]]
+    train_data = [dataset['seq'][train_idx], dataset['all_data'][train_idx], dataset['all_row_col'][train_idx],
+                  dataset['segment_size'][train_idx], dataset['raw_seq'][train_idx]]
     model.fit(train_data, dataset['label'][train_idx], EPOCHS, BATCH_SIZE, fold_output, logging=True)
 
-    test_data = [dataset['seq'][test_idx], dataset['all_data'][test_idx],
-                 dataset['all_row_col'][test_idx], dataset['segment_size'][test_idx]]
+    test_data = [dataset['seq'][test_idx], dataset['all_data'][test_idx], dataset['all_row_col'][test_idx],
+                 dataset['segment_size'][test_idx], dataset['raw_seq'][test_idx]]
 
-    cost, acc, auc = model.evaluate(test_data, dataset['label'][test_idx], BATCH_SIZE)
+    cost, acc, auc = model.evaluate(test_data, dataset['label'][test_idx], BATCH_SIZE, random_crop=False)
 
     print('Evaluation (with masking) on held-out test set, acc (pos, seq): %s, auc: %.3f' % (acc, auc))
 
@@ -168,10 +169,8 @@ def run_one_rbp(idx, q):
     q.put({
         'fold': idx,
         'seq_acc': acc[0],
-        'gnn_pos_acc': acc[1],
-        'bilstm_pos_acc': acc[2],
-        'gnn_nuc_acc': acc[3],
-        'bilstm_nuc_acc': acc[4],
+        'gnn_nuc_acc': acc[1],
+        'bilstm_nuc_acc': acc[2],
         'auc': auc
     })
 
@@ -200,48 +199,15 @@ if __name__ == "__main__":
 
     dataset = \
         lib.graphprot_dataloader.load_clip_seq([TRAIN_RBP_ID], use_embedding=FLAGS.use_embedding,
-                                               fold_algo=FLAGS.fold_algo, force_folding=FLAGS.force_folding,
+                                               fold_algo=FLAGS.fold_algo,
                                                probabilistic=FLAGS.probabilistic, w=FLAGS.folding_winsize,
-                                               nucleotide_label=True)[0]  # load one at a time
-    if TRAIN_RBP_ID == 'CLIPSEQ_AGO2':
-        dataset['splits'] = np.load(
-            'output/Joint-SMRGCN-Graphprot/20191004-022737-AMSGrad-mr0.05-l10-e200-win150-ghm-10-0.75-BCE-only-CLIPSEQ_AGO2/splits.npy',
-            allow_pickle=True)
-        all_folds = list(range(4, 10))
-    elif TRAIN_RBP_ID == 'ICLIP_TIAL1':
-        dataset['splits'] = np.load(
-            'output/Joint-SMRGCN-Graphprot/20191004-023355-AMSGrad-mr0.05-l10-e200-win150-ghm-10-0.75-BCE-only-ICLIP_TIAL1/splits.npy',
-            allow_pickle=True)
-        all_folds = [8, 9]
-    elif TRAIN_RBP_ID == 'PARCLIP_AGO1234':
-        dataset['splits'] = np.load(
-            'output/Joint-SMRGCN-Graphprot/20191004-023533-AMSGrad-mr0.05-l10-e200-win150-ghm-10-0.75-BCE-only-PARCLIP_AGO1234/splits.npy',
-            allow_pickle=True)
-        all_folds = [8, 9]
-    elif TRAIN_RBP_ID == 'PTBv1':
-        dataset['splits'] = np.load(
-            'output/Joint-SMRGCN-Graphprot/20191004-024840-AMSGrad-mr0.05-l10-e200-win150-ghm-10-0.75-BCE-only-PTBv1/splits.npy',
-            allow_pickle=True)
-        all_folds = [8, 9]
-    elif TRAIN_RBP_ID == 'ICLIP_TDP43':
-        dataset['splits'] = np.load(
-            'output/Joint-SMRGCN-Graphprot/20191005-031423-AMSGrad-mr0.05-l10-e100-win150-ghm-10-0.75-BCE-only-ICLIP_TDP43/splits.npy',
-            allow_pickle=True)
-        all_folds = [8, 9]
-    elif TRAIN_RBP_ID == 'PARCLIP_HUR':
-        dataset['splits'] = np.load(
-            'output/Joint-SMRGCN-Graphprot/20191005-062028-AMSGrad-mr0.05-l10-e100-win150-ghm-10-0.75-BCE-only-PARCLIP_HUR/splits.npy',
-            allow_pickle=True)
-        all_folds = [1, 2, 4, 5, 6, 7, 8, 9]
-    else:
-        np.save(os.path.join(output_dir, 'splits.npy'), dataset['splits'])
-        all_folds = list(range(len(dataset['splits'])))
-
+                                               nucleotide_label=True, modify_leaks=True)[0]  # load one at a time
+    np.save(os.path.join(output_dir, 'splits.npy'), dataset['splits'])
     manager = mp.Manager()
     q = manager.Queue()
     pool = Pool(FLAGS.parallel_processes + 1)
     logger_thread = pool.apply_async(Logger, (q,))
-    pool.map(functools.partial(run_one_rbp, q=q), all_folds, chunksize=1)
+    pool.map(functools.partial(run_one_rbp, q=q), range(len(dataset['splits'])), chunksize=1)
 
     q.put('kill')  # terminate logger thread
     pool.close()

@@ -129,15 +129,16 @@ class JMRT:
                                                   self.is_training_ph, self.lstm_encoder, mask_offset,
                                                   variables_on_cpu=False)
 
-        self.bilstm_nuc_embedding = tf.get_collection('bilstm_nuc_emb')[0]
-        self.bilstm_nuc_output = lib.ops.Linear.linear('bilstm_nuc_output', self.units * 2, 2,
-                                                       self.bilstm_nuc_embedding)
+        self.nuc_embedding = tf.get_collection('nuc_emb')[0]  # will depend on if bilstm encoder is used or not
+        self.nuc_output = lib.ops.Linear.linear('bilstm_nuc_output',
+                                                self.units * 2 if self.lstm_encoder else self.units, 2,
+                                                self.nuc_embedding)
         self.output = lib.ops.Linear.linear('OutputMapping', output.get_shape().as_list()[-1],
                                             2, output, variables_on_cpu=False)  # categorical logits
 
     def _loss(self):
         self.prediction = tf.nn.softmax(self.output)
-        self.bilstm_nuc_prediction = tf.nn.softmax(self.bilstm_nuc_output)
+        self.nuc_prediction = tf.nn.softmax(self.nuc_output)
 
         # graph level loss
         self.graph_cost = tf.reduce_mean(
@@ -149,23 +150,23 @@ class JMRT:
         # dummies are padded to the front...
         self.mask = 1.0 - tf.sequence_mask(self.mask_offset, maxlen=self.max_len, dtype=tf.float32)
         if self.use_ghm:
-            self.bilstm_nuc_cost = tf.reduce_sum(
-                get_ghm_weights(self.bilstm_nuc_prediction, self.labels, self.mask,
-                                bins=10, alpha=0.75, name='GHM_BILSTM') * \
+            self.nuc_cost = tf.reduce_sum(
+                get_ghm_weights(self.nuc_prediction, self.labels, self.mask,
+                                bins=10, alpha=0.75, name='GHM_NUC_EMB') * \
                 tf.nn.softmax_cross_entropy_with_logits(
-                    logits=self.bilstm_nuc_output,
+                    logits=self.nuc_output,
                     labels=tf.one_hot(self.labels, depth=2),
                 ) / tf.cast(tf.reduce_sum(self.segment_length), tf.float32)
             )
         else:
-            self.bilstm_nuc_cost = tf.reduce_sum(
+            self.nuc_cost = tf.reduce_sum(
                 self.mask * \
                 tf.nn.softmax_cross_entropy_with_logits(
-                    logits=self.bilstm_nuc_output,
+                    logits=self.nuc_output,
                     labels=tf.one_hot(self.labels, depth=2),
                 )) / tf.cast(tf.reduce_sum(self.segment_length), tf.float32)
 
-        self.cost = self.mixing_ratio * self.graph_cost + (1. - self.mixing_ratio) * self.bilstm_nuc_cost
+        self.cost = self.mixing_ratio * self.graph_cost + (1. - self.mixing_ratio) * self.nuc_cost
 
     def _train(self):
         self.gv = self.optimizer.compute_gradients(self.cost,
@@ -173,33 +174,21 @@ class JMRT:
                                                    colocate_gradients_with_ops=True)
 
     def _merge(self):
+        # If the example contains a binding site: more global
         self.seq_acc_val, self.seq_acc_update_op = tf.metrics.accuracy(
             labels=tf.reduce_max(self.labels, axis=-1),
             predictions=tf.to_int32(tf.argmax(self.prediction, axis=-1)),
         )
 
-        # nucleotide level accuracy of precise matching on each location
-        self.bilstm_pos_acc_val, self.bilstm_pos_acc_update_op = tf.metrics.accuracy(
-            labels=self.segment_length,
-            predictions=tf.reduce_sum(
-                self.mask *
-                tf.cast(
-                    tf.equal(
-                        tf.to_int32(tf.argmax(self.bilstm_nuc_output, axis=-1)),
-                        self.labels
-                    ), tf.float32), axis=-1)  # along the RNA sequence
-        )
-
         # nucleotide level accuracy of containing a binding site
-        self.bilstm_nuc_acc_val, self.bilstm_nuc_acc_update_op = tf.metrics.accuracy(
+        self.nuc_acc_val, self.nuc_acc_update_op = tf.metrics.accuracy(
             labels=tf.reduce_max(self.labels, axis=-1),
             predictions=tf.to_int32(tf.reduce_max(
-                tf.argmax(self.bilstm_nuc_prediction, axis=-1), axis=-1)),
+                tf.argmax(self.nuc_prediction, axis=-1), axis=-1)),
         )
 
-        self.acc_val = [self.seq_acc_val, self.bilstm_pos_acc_val, self.bilstm_nuc_acc_val]
-        self.acc_update_op = [self.seq_acc_update_op, self.bilstm_pos_acc_update_op,
-                              self.bilstm_nuc_acc_update_op]
+        self.acc_val = [self.seq_acc_val, self.nuc_acc_val]
+        self.acc_update_op = [self.seq_acc_update_op, self.nuc_acc_update_op]
 
         # graph level ROC AUC
         self.auc_val, self.auc_update_op = tf.metrics.auc(
@@ -230,6 +219,39 @@ class JMRT:
     def indexing_iterable(cls, iterable, idx):
         return [item[idx] for item in iterable]
 
+    @classmethod
+    def random_crop(cls, node_tensor, raw_seq, y, pos_read_retention_rate=0.5):
+        m_seq, m_label, m_sg, m_data, m_row_col = [], [], [], [], []
+        for seq, _raw_seq, label in zip(node_tensor, raw_seq, y):
+            if np.max(label) == 0:
+                # negative sequence
+                pseudo_label = (np.array(list(_raw_seq)) <= 'Z').astype(np.int32)
+                pos_idx = np.where(pseudo_label == 1)[0]
+            else:
+                pos_idx = np.where(label == 1)[0]
+                # keep more than 3/4 of the sequence (length), and random start
+                read_length = len(pos_idx)
+                winsize = np.random.choice(
+                    range(int(max(pos_read_retention_rate, np.random.rand()) * read_length), read_length + 1)
+                )
+                start_idx = np.random.choice(range(read_length - winsize + 1))
+                label = [0] * (pos_idx[0] + start_idx) + [1] * winsize + [0] * \
+                        (len(seq) - winsize - start_idx - pos_idx[0])
+
+            left_truncate = int(np.random.rand() * pos_idx[0])
+            right_truncate = int(np.random.rand() * (len(seq) - pos_idx[-1] - 1))
+
+            if not right_truncate > 0:
+                right_truncate = -len(seq)
+
+            seq = seq[left_truncate: -right_truncate]
+            label = label[left_truncate: -right_truncate]
+            m_seq.append(seq)
+            m_sg.append(len(seq))
+            m_label.append(label)
+
+        return np.array(m_seq), np.array(m_sg), np.array(m_label)
+
     def fit(self, X, y, epochs, batch_size, output_dir, logging=False, epoch_to_start=0):
         checkpoints_dir = os.path.join(output_dir, 'checkpoints/')
         if not os.path.exists(checkpoints_dir):
@@ -244,7 +266,6 @@ class JMRT:
 
         dev_data = self.indexing_iterable(X, dev_idx)
         dev_targets = y[dev_idx]
-
         X = self.indexing_iterable(X, train_idx)
         train_targets = y[train_idx]
 
@@ -254,18 +275,21 @@ class JMRT:
         lib.plot.set_output_dir(output_dir)
         if logging:
             logger = lib.logger.CSVLogger('run.csv', output_dir,
-                                          ['epoch', 'cost', 'graph_cost', 'bilstm_nuc_cost',
-                                           'seq_acc', 'bilstm_pos_acc', 'bilstm_nuc_acc',
-                                           'auc',
-                                           'dev_cost', 'dev_graph_cost', 'dev_bilstm_nuc_cost',
-                                           'dev_seq_acc', 'dev_bilstm_pos_acc', 'dev_bilstm_nuc_acc',
-                                           'dev_auc'])
+                                          ['epoch', 'cost', 'graph_cost', 'nuc_cost',
+                                           'seq_acc', 'nuc_acc', 'auc',
+                                           'dev_cost', 'dev_graph_cost', 'dev_nuc_cost',
+                                           'dev_seq_acc', 'dev_nuc_acc', 'dev_auc'])
 
         for epoch in range(epoch_to_start, epochs):
 
             permute = np.random.permutation(size_train)
-            node_tensor, segment_length = self.indexing_iterable(X, permute)
+            node_tensor, segment_length, raw_seq = self.indexing_iterable(X, permute)
             y = train_targets[permute]
+
+            # augmentation
+            # node_tensor, segment_length, y = \
+            #     self.random_crop(node_tensor, raw_seq, y)
+
             prepro_time = 0.
             training_time = 0.
             for i in range(iters_per_epoch):
@@ -295,30 +319,26 @@ class JMRT:
             train_cost, train_acc, train_auc = self.evaluate(X, train_targets, batch_size)
             lib.plot.plot('train_cost', train_cost[0])
             lib.plot.plot('train_graph_cost', train_cost[1])
-            lib.plot.plot('train_bilstm_nuc_cost', train_cost[2])
+            lib.plot.plot('train_nuc_cost', train_cost[2])
             lib.plot.plot('train_seq_acc', train_acc[0])
-            lib.plot.plot('train_bilstm_pos_acc', train_acc[1])
-            lib.plot.plot('train_bilstm_nuc_acc', train_acc[2])
+            lib.plot.plot('train_nuc_acc', train_acc[1])
             lib.plot.plot('train_auc', train_auc)
 
             dev_cost, dev_acc, dev_auc = self.evaluate(dev_data, dev_targets, batch_size)
             lib.plot.plot('dev_cost', dev_cost[0])
             lib.plot.plot('dev_graph_cost', dev_cost[1])
-            lib.plot.plot('dev_bilstm_nuc_cost', dev_cost[2])
+            lib.plot.plot('dev_nuc_cost', dev_cost[2])
             lib.plot.plot('dev_seq_acc', dev_acc[0])
-            lib.plot.plot('dev_bilstm_pos_acc', dev_acc[1])
-            lib.plot.plot('dev_bilstm_nuc_acc', dev_acc[2])
+            lib.plot.plot('dev_nuc_acc', dev_acc[1])
             lib.plot.plot('dev_auc', dev_auc)
 
             logger.update_with_dict({
                 'epoch': epoch, 'cost': train_cost[0], 'graph_cost': train_cost[1],
-                'bilstm_nuc_cost': train_cost[2], 'seq_acc': train_acc[0],
-                'bilstm_pos_acc': train_acc[1], 'bilstm_nuc_acc': train_acc[2],
+                'nuc_cost': train_cost[2], 'seq_acc': train_acc[0], 'nuc_acc': train_acc[1],
                 'auc': train_auc,
                 'dev_cost': dev_cost[0], 'dev_graph_cost': dev_cost[1],
-                'dev_bilstm_nuc_cost': dev_cost[2], 'dev_seq_acc': dev_acc[0],
-                'dev_bilstm_pos_acc': dev_acc[1], 'dev_bilstm_nuc_acc': dev_acc[2],
-                'dev_auc': dev_auc,
+                'dev_nuc_cost': dev_cost[2], 'dev_seq_acc': dev_acc[0],
+                'dev_nuc_acc': dev_acc[1], 'dev_auc': dev_auc,
             })
 
             lib.plot.flush()
@@ -336,8 +356,12 @@ class JMRT:
         if logging:
             logger.close()
 
-    def evaluate(self, X, y, batch_size):
-        node_tensor, segment_length = X
+    def evaluate(self, X, y, batch_size, random_crop=True):
+        node_tensor, segment_length, raw_seq = X
+        if random_crop:
+            # augmentation
+            node_tensor, segment_length, y = \
+                self.random_crop(node_tensor, raw_seq, y)
         all_cost = 0.
         all_graph_cost = 0.
         all_bilstm_nuc_cost = 0.
@@ -360,7 +384,7 @@ class JMRT:
             }
 
             cost, graph_cost, bilstm_nuc_cost, _, _ = self.sess.run(
-                [self.cost, self.graph_cost, self.bilstm_nuc_cost,
+                [self.cost, self.graph_cost, self.nuc_cost,
                  self.acc_update_op, self.auc_update_op], feed_dict)
             all_cost += cost * len(_node_tensor)
             all_graph_cost += graph_cost * len(_node_tensor)

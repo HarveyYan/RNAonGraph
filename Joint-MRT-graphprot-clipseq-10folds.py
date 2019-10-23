@@ -14,17 +14,17 @@ from Model.Joint_MRT import JMRT
 
 tf.logging.set_verbosity(tf.logging.FATAL)
 tf.app.flags.DEFINE_string('output_dir', '', '')
-tf.app.flags.DEFINE_integer('epochs', 50, '')
+tf.app.flags.DEFINE_integer('epochs', 400, '')
 tf.app.flags.DEFINE_list('gpu_device', '0,1', '')
 tf.app.flags.DEFINE_bool('use_clr', True, '')
 tf.app.flags.DEFINE_bool('use_momentum', False, '')
-tf.app.flags.DEFINE_integer('parallel_processes', 1, '')
+tf.app.flags.DEFINE_integer('parallel_processes', 2, '')
 tf.app.flags.DEFINE_integer('batch_size', 128, '')
-tf.app.flags.DEFINE_bool('share_device', False, '')
+tf.app.flags.DEFINE_bool('share_device', True, '')
 # some experiment settings
 tf.app.flags.DEFINE_bool('use_embedding', False, '')
 # major changes !
-tf.app.flags.DEFINE_string('train_rbp_id', 'PARCLIP_PUM2', '')
+tf.app.flags.DEFINE_string('train_rbp_id', 'CAPRIN1_Baltz2012', '')
 tf.app.flags.DEFINE_float('mixing_ratio', 0.05, '')
 tf.app.flags.DEFINE_bool('use_ghm', False, '')
 FLAGS = tf.app.flags.FLAGS
@@ -64,7 +64,7 @@ def Logger(q):
     all_auc = []
     registered_gpus = {}
     logger = lib.logger.CSVLogger('results.csv', output_dir,
-                                  ['fold', 'seq_acc', 'bilstm_pos_acc', 'bilstm_nuc_acc', 'auc'])
+                                  ['fold', 'seq_acc', 'nuc_acc', 'auc'])
     while True:
         msg = q.get()
         print(msg)
@@ -106,7 +106,7 @@ def run_one_rbp(idx, q):
     fold_output = os.path.join(output_dir, 'fold%d' % (idx))
     os.makedirs(fold_output)
 
-    outfile = open(os.path.join(fold_output, str(os.getpid())) + ".out", "w")
+    outfile = open(os.path.join(fold_output, str(os.getpid())) + ".out", "w", buffering=0)
     sys.stdout = outfile
     sys.stderr = outfile
 
@@ -130,11 +130,11 @@ def run_one_rbp(idx, q):
     train_idx, test_idx = dataset['splits'][idx]
     model = JMRT(dataset['VOCAB_VEC'].shape[1], dataset['VOCAB_VEC'], device, **hp)
 
-    train_data = [dataset['seq'][train_idx], dataset['segment_size'][train_idx]]
+    train_data = [dataset['seq'][train_idx], dataset['segment_size'][train_idx], dataset['raw_seq'][train_idx]]
     model.fit(train_data, dataset['label'][train_idx], EPOCHS, BATCH_SIZE, fold_output, logging=True)
 
-    test_data = [dataset['seq'][test_idx], dataset['segment_size'][test_idx]]
-    cost, acc, auc = model.evaluate(test_data, dataset['label'][test_idx], BATCH_SIZE)
+    test_data = [dataset['seq'][test_idx], dataset['segment_size'][test_idx], dataset['raw_seq'][test_idx]]
+    cost, acc, auc = model.evaluate(test_data, dataset['label'][test_idx], BATCH_SIZE, random_crop=False)
     print('Evaluation (with masking) on held-out test set, acc: %s, auc: %.3f' % (acc, auc))
 
     model.delete()
@@ -143,8 +143,7 @@ def run_one_rbp(idx, q):
     q.put({
         'fold': idx,
         'seq_acc': acc[0],
-        'bilstm_pos_acc': acc[1],
-        'bilstm_nuc_acc': acc[2],
+        'nuc_acc': acc[1],
         'auc': auc
     })
 
@@ -174,7 +173,7 @@ if __name__ == "__main__":
     dataset = \
         lib.graphprot_dataloader.load_clip_seq(
             [TRAIN_RBP_ID], use_embedding=FLAGS.use_embedding,
-            load_mat=False, nucleotide_label=True)[0]  # load one at a time
+            load_mat=False, nucleotide_label=True, modify_leaks=True)[0]  # load one at a time
     np.save(os.path.join(output_dir, 'splits.npy'), dataset['splits'])
     manager = mp.Manager()
     q = manager.Queue()
