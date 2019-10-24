@@ -132,12 +132,20 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
                     else:
                         pos_idx = np.where((np.array(seq) <= 'Z').astype(np.int32) == 1)[0]
 
-                    if rbp == 'CAPRIN1_Baltz2012':
-                        indices = [pos_idx[-1], pos_idx[0] + 1, pos_idx[0], pos_idx[0] - 1]
+                    if rbp == 'PARCLIP_IGF2BP123':
+                        indices = [pos_idx[-1], pos_idx[0], pos_idx[0] - 1, pos_idx[0] - 2]
                     elif rbp == 'CAPRIN1_Baltz2012':
-                        indices = [pos_idx[-1], pos_idx[-1] - 1, pos_idx[0] + 1, pos_idx[0], pos_idx[0] - 1]
+                        indices = [pos_idx[-1], pos_idx[-1] - 1, pos_idx[0], pos_idx[0] - 1, pos_idx[0] - 2]
                     elif rbp == 'PARCLIP_PUM2':
+                        # unable to obtain perfect mask
                         indices = [pos_idx[-1], pos_idx[0] - 1]
+                    elif rbp == 'PARCLIP_AGO1234':
+                        # unable to obtain perfect mask
+                        indices = [pos_idx[-1], pos_idx[0] - 1]
+                    elif rbp == 'PARCLIP_MOV10_Sievers':
+                        indices = [pos_idx[-1], pos_idx[-1] - 1, pos_idx[0] - 1]
+                    elif rbp == 'ZC3H7B_Baltz2012':
+                        indices = [pos_idx[-1], pos_idx[-1] - 1, pos_idx[0] + 1, pos_idx[0], pos_idx[0] - 1]
                     else:
                         raise ValueError('TODO: modify_leaks option has not been made available for %s' % (rbp))
 

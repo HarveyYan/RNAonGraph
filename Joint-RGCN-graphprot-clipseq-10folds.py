@@ -83,8 +83,9 @@ def Logger(q):
     all_auc = []
     registered_gpus = {}
     logger = lib.logger.CSVLogger('results.csv', output_dir,
-                                  ['fold', 'seq_acc', 'gnn_pos_acc', 'bilstm_pos_acc',
-                                   'gnn_nuc_acc', 'bilstm_nuc_acc', 'auc'])
+                                  ['fold', 'seq_acc', 'gnn_nuc_acc', 'bilstm_nuc_acc', 'auc',
+                                   'original_seq_acc', 'original_gnn_nuc_acc', 'original_bilstm_nuc_acc',
+                                   'original_auc'])
     while True:
         msg = q.get()
         print(msg)
@@ -156,12 +157,31 @@ def run_one_rbp(idx, q):
                   dataset['segment_size'][train_idx], dataset['raw_seq'][train_idx]]
     model.fit(train_data, dataset['label'][train_idx], EPOCHS, BATCH_SIZE, fold_output, logging=True)
 
+    # evaluate our model on the debiased test data
     test_data = [dataset['seq'][test_idx], dataset['all_data'][test_idx], dataset['all_row_col'][test_idx],
                  dataset['segment_size'][test_idx], dataset['raw_seq'][test_idx]]
-
     cost, acc, auc = model.evaluate(test_data, dataset['label'][test_idx], BATCH_SIZE, random_crop=False)
+    print('Evaluation (with masking) on debiased held-out test set, acc (pos, seq): %s, auc: %.3f' % (acc, auc))
 
-    print('Evaluation (with masking) on held-out test set, acc (pos, seq): %s, auc: %.3f' % (acc, auc))
+    # evaluate our model on the original data with the bias
+    original_test_data = [original_dataset['seq'][test_idx], original_dataset['all_data'][test_idx],
+                          original_dataset['all_row_col'][test_idx], original_dataset['segment_size'][test_idx],
+                          original_dataset['raw_seq'][test_idx]]
+    original_cost, original_acc, original_auc = \
+        model.evaluate(original_test_data, original_dataset['label'][test_idx], BATCH_SIZE, random_crop=False)
+    print('Evaluation (with masking) on original held-out test set, acc (pos, seq): %s, auc: %.3f' %
+          (original_acc, original_auc))
+
+    # get predictions
+    np.save(os.path.join(fold_output, 'predictions.npy'), model.predict(original_test_data, BATCH_SIZE))
+
+    # plot some motifs
+    graph_dir = os.path.join(fold_output, 'integrated_gradients')
+    if not os.path.exists(graph_dir):
+        os.makedirs(graph_dir)
+
+    model.integrated_gradients(original_test_data, original_dataset['label'][test_idx],
+                               original_dataset['id'][test_idx], save_path=graph_dir, max_plots=200)
 
     model.delete()
     reload(lib.plot)
@@ -171,7 +191,11 @@ def run_one_rbp(idx, q):
         'seq_acc': acc[0],
         'gnn_nuc_acc': acc[1],
         'bilstm_nuc_acc': acc[2],
-        'auc': auc
+        'auc': auc,
+        'original_seq_acc': original_acc[0],
+        'original_gnn_nuc_acc': original_acc[1],
+        'original_bilstm_nuc_acc': original_acc[2],
+        'original_auc': original_auc,
     })
 
 
@@ -197,11 +221,20 @@ if __name__ == "__main__":
     shutil.copy(inspect.getfile(lib.graphprot_dataloader), backup_dir)
     shutil.copy(inspect.getfile(lib.rna_utils), backup_dir)
 
+    # This one corrects the nucleotide bias at the beginning or at the end of a viewpoint region
     dataset = \
         lib.graphprot_dataloader.load_clip_seq([TRAIN_RBP_ID], use_embedding=FLAGS.use_embedding,
                                                fold_algo=FLAGS.fold_algo,
                                                probabilistic=FLAGS.probabilistic, w=FLAGS.folding_winsize,
-                                               nucleotide_label=True, modify_leaks=True)[0]  # load one at a time
+                                               nucleotide_label=True, modify_leaks=True)[0]
+
+    # This one is the original dataset, with the bias
+    original_dataset = \
+        lib.graphprot_dataloader.load_clip_seq([TRAIN_RBP_ID], use_embedding=FLAGS.use_embedding,
+                                               fold_algo=FLAGS.fold_algo,
+                                               probabilistic=FLAGS.probabilistic, w=FLAGS.folding_winsize,
+                                               nucleotide_label=True, modify_leaks=False)[0]  # load one at a time
+
     np.save(os.path.join(output_dir, 'splits.npy'), dataset['splits'])
     manager = mp.Manager()
     q = manager.Queue()

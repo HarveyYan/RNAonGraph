@@ -62,6 +62,7 @@ class JMRT:
                 self.saver = tf.train.Saver(max_to_keep=10)
                 self.init = tf.global_variables_initializer()
                 self.local_init = tf.local_variables_initializer()
+                self.g.finalize()
         self._init_session()
 
     def _placeholders(self):
@@ -196,9 +197,11 @@ class JMRT:
             predictions=self.prediction[:, 1],
         )
 
+        self.g_nodes = tf.gradients(self.prediction[:, 1], self.node_tensor)[0]
+
     def _init_session(self):
         gpu_options = tf.GPUOptions()
-        gpu_options.allow_growth = True
+        gpu_options.per_process_gpu_memory_fraction = 0.45
         if type(self.gpu_device) is list:
             gpu_options.visible_device_list = ','.join([device[-1] for device in self.gpu_device])
         else:
@@ -252,7 +255,7 @@ class JMRT:
 
         return np.array(m_seq), np.array(m_sg), np.array(m_label)
 
-    def fit(self, X, y, epochs, batch_size, output_dir, logging=False, epoch_to_start=0):
+    def fit(self, X, y, epochs, batch_size, output_dir, logging=False, epoch_to_start=0, random_crop=False):
         checkpoints_dir = os.path.join(output_dir, 'checkpoints/')
         if not os.path.exists(checkpoints_dir):
             os.makedirs(checkpoints_dir)
@@ -286,9 +289,10 @@ class JMRT:
             node_tensor, segment_length, raw_seq = self.indexing_iterable(X, permute)
             y = train_targets[permute]
 
-            # augmentation
-            # node_tensor, segment_length, y = \
-            #     self.random_crop(node_tensor, raw_seq, y)
+            if random_crop:
+                # augmentation
+                node_tensor, segment_length, y = \
+                    self.random_crop(node_tensor, raw_seq, y)
 
             prepro_time = 0.
             training_time = 0.
@@ -356,7 +360,7 @@ class JMRT:
         if logging:
             logger.close()
 
-    def evaluate(self, X, y, batch_size, random_crop=True):
+    def evaluate(self, X, y, batch_size, random_crop=False):
         node_tensor, segment_length, raw_seq = X
         if random_crop:
             # augmentation
@@ -394,37 +398,67 @@ class JMRT:
         return (all_cost / len(node_tensor), all_graph_cost / len(node_tensor),
                 all_bilstm_nuc_cost / len(node_tensor)), acc, auc
 
-    def predict(self, X, y=None):
-        # predict one at a time without masking
-        node_tensor, segment_length = X
-        all_predicton = []
-        for i in range(len(node_tensor)):
+    def predict(self, X, batch_size):
+        node_tensor, segment_length, raw_seq = X
+        preds = []
+        iters_per_epoch = len(node_tensor) // batch_size + (0 if len(node_tensor) % batch_size == 0 else 1)
+        for i in range(iters_per_epoch):
             _node_tensor, _segment \
-                = node_tensor[i], \
-                  segment_length[i]
+                = node_tensor[i * batch_size: (i + 1) * batch_size], \
+                  segment_length[i * batch_size: (i + 1) * batch_size]
+
+            _max_len = max(_segment)
 
             feed_dict = {
-                self.node_input_ph: _node_tensor,
+                self.node_input_ph: np.concatenate(_node_tensor, axis=0),
+                self.max_len: _max_len,
+                self.segment_length: _segment,
+                self.is_training_ph: False
+            }
+            preds.append(self.sess.run(self.prediction, feed_dict))
+
+        return np.concatenate(np.array(preds), axis=0)
+
+    def integrated_gradients(self, X, y, ids, interp_steps=100, save_path=None, max_plots=np.inf):
+        counter = 0
+        print('begins')
+        for _node_tensor, _segment, _, _label, _id in zip(*X, y, ids):
+            if np.max(_label) == 0:
+                continue
+            if counter >= max_plots:
+                break
+            _meshed_node_tensor = np.array([self.embedding_vec[idx] for idx in _node_tensor])
+            _meshed_reference_input = np.zeros_like(_meshed_node_tensor)
+            new_node_tensor = []
+            for i in range(0, interp_steps + 1):
+                new_node_tensor.append(
+                    _meshed_reference_input + i / interp_steps * (_meshed_node_tensor - _meshed_reference_input))
+
+            feed_dict = {
+                self.node_tensor: np.concatenate(np.array(new_node_tensor), axis=0),
                 self.max_len: _segment,
-                self.segment_length: [_segment],
+                self.segment_length: [_segment] * (interp_steps + 1),
                 self.is_training_ph: False
             }
 
-            feed_tensor = [self.prediction]
+            grads = self.sess.run(self.g_nodes, feed_dict).reshape((interp_steps + 1, _segment, 4))
+            grads = (grads[:-1] + grads[1:]) / 2.0
+            node_scores = np.average(grads, axis=0) * (_meshed_node_tensor - _meshed_reference_input)
 
-            if y is not None:
-                feed_dict[self.labels] = [y[i]]
-                feed_tensor += [self.acc_update_op, self.auc_update_op]
+            pos_idx = np.where(_label == 1)[0]
+            extended_start = max(pos_idx[0] - 50, 0)
+            extended_end = min(pos_idx[-1] + 50, _segment)
+            extended_region = [extended_start, extended_end]
+            viewpoint_region = [pos_idx[0] - extended_start, pos_idx[-1] - extended_start + 1]
 
-            all_predicton.append(self.sess.run(feed_tensor, feed_dict)[0])
-        all_predicton = np.concatenate(all_predicton, axis=0)
-
-        if y is not None:
-            acc, auc = self.sess.run([self.acc_val, self.auc_val])
-            self.sess.run(self.local_init)
-            return all_predicton, acc, auc
-        else:
-            return all_predicton
+            if save_path is not None:
+                saveto = os.path.join(save_path, '%s.jpg' % (_id))
+            else:
+                saveto = None
+            lib.plot.plot_weights(node_scores[range(*extended_region)],
+                                  subticks_frequency=10, highlight={'r': [viewpoint_region]},
+                                  save_path=saveto)
+            counter += 1
 
     def delete(self):
         tf.reset_default_graph()

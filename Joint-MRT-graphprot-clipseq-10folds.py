@@ -64,7 +64,8 @@ def Logger(q):
     all_auc = []
     registered_gpus = {}
     logger = lib.logger.CSVLogger('results.csv', output_dir,
-                                  ['fold', 'seq_acc', 'nuc_acc', 'auc'])
+                                  ['fold', 'seq_acc', 'nuc_acc', 'auc',
+                                   'original_seq_acc', 'original_nuc_acc', 'original_auc'])
     while True:
         msg = q.get()
         print(msg)
@@ -106,7 +107,7 @@ def run_one_rbp(idx, q):
     fold_output = os.path.join(output_dir, 'fold%d' % (idx))
     os.makedirs(fold_output)
 
-    outfile = open(os.path.join(fold_output, str(os.getpid())) + ".out", "w", buffering=0)
+    outfile = open(os.path.join(fold_output, str(os.getpid())) + ".out", "w")
     sys.stdout = outfile
     sys.stderr = outfile
 
@@ -135,7 +136,24 @@ def run_one_rbp(idx, q):
 
     test_data = [dataset['seq'][test_idx], dataset['segment_size'][test_idx], dataset['raw_seq'][test_idx]]
     cost, acc, auc = model.evaluate(test_data, dataset['label'][test_idx], BATCH_SIZE, random_crop=False)
-    print('Evaluation (with masking) on held-out test set, acc: %s, auc: %.3f' % (acc, auc))
+    print('Evaluation (with masking) on modified held-out test set, acc: %s, auc: %.3f' % (acc, auc))
+
+    original_test_data = [original_dataset['seq'][test_idx], original_dataset['segment_size'][test_idx],
+                 original_dataset['raw_seq'][test_idx]]
+    original_cost, original_acc, original_auc = model.evaluate(test_data, original_dataset['label'][test_idx],
+                                                               BATCH_SIZE, random_crop=False)
+    print('Evaluation (with masking) on original held-out test set, acc: %s, auc: %.3f' % (acc, auc))
+
+    # get predictions
+    np.save(os.path.join(fold_output, 'predictions.npy'), model.predict(original_test_data, BATCH_SIZE))
+
+    # plot some motifs
+    graph_dir = os.path.join(fold_output, 'integrated_gradients')
+    if not os.path.exists(graph_dir):
+        os.makedirs(graph_dir)
+
+    model.integrated_gradients(original_test_data, original_dataset['label'][test_idx],
+                               original_dataset['id'][test_idx], save_path=graph_dir, max_plots=200)
 
     model.delete()
     reload(lib.plot)
@@ -144,7 +162,10 @@ def run_one_rbp(idx, q):
         'fold': idx,
         'seq_acc': acc[0],
         'nuc_acc': acc[1],
-        'auc': auc
+        'auc': auc,
+        'original_seq_acc': original_acc[0],
+        'original_nuc_acc': original_acc[1],
+        'original_auc': original_auc
     })
 
 
@@ -173,7 +194,13 @@ if __name__ == "__main__":
     dataset = \
         lib.graphprot_dataloader.load_clip_seq(
             [TRAIN_RBP_ID], use_embedding=FLAGS.use_embedding,
-            load_mat=False, nucleotide_label=True, modify_leaks=True)[0]  # load one at a time
+            load_mat=False, nucleotide_label=True, modify_leaks=True)[0]
+
+    original_dataset = \
+        lib.graphprot_dataloader.load_clip_seq(
+            [TRAIN_RBP_ID], use_embedding=FLAGS.use_embedding,
+            load_mat=False, nucleotide_label=True, modify_leaks=False)[0]
+
     np.save(os.path.join(output_dir, 'splits.npy'), dataset['splits'])
     manager = mp.Manager()
     q = manager.Queue()

@@ -307,9 +307,11 @@ class JSMRGCN:
             predictions=self.prediction[:, 1],
         )
 
+        self.g_nodes = tf.gradients(self.prediction[:, 1], self.node_tensor)[0]
+
     def _init_session(self):
         gpu_options = tf.GPUOptions()
-        gpu_options.allow_growth = True
+        gpu_options.per_process_gpu_memory_fraction = 0.45
         if type(self.gpu_device) is list:
             gpu_options.visible_device_list = ','.join([device[-1] for device in self.gpu_device])
         else:
@@ -521,6 +523,8 @@ class JSMRGCN:
             logger.close()
         train_generator.kill.set()
         val_generator.kill.set()
+        train_generator.join(1)
+        val_generator.join(1)
 
     def evaluate_with_generator(self, generator):
         all_cost, all_graph_cost, all_gnn_nuc_cost, all_bilstm_nuc_cost = 0., 0., 0., 0.
@@ -587,42 +591,74 @@ class JSMRGCN:
         return (all_cost / len(node_tensor), all_graph_cost / len(node_tensor),
                 all_gnn_nuc_cost / len(node_tensor), all_bilstm_nuc_cost / len(node_tensor)), acc, auc
 
-    def predict(self, X, y=None):
-        # predict one at a time without masking
-        node_tensor, all_rel_data, all_row_col, segment_length = X
-        all_predicton = []
-        for i in range(len(node_tensor)):
+    def predict(self, X, batch_size):
+        node_tensor, all_rel_data, all_row_col, segment_length, raw_seq = X
+        preds = []
+        iters_per_epoch = len(node_tensor) // batch_size + (0 if len(node_tensor) % batch_size == 0 else 1)
+        for i in range(iters_per_epoch):
             _node_tensor, _rel_data, _row_col, _segment \
-                = node_tensor[i], \
-                  all_rel_data[i], \
-                  all_row_col[i], \
-                  segment_length[i]
+                = node_tensor[i * batch_size: (i + 1) * batch_size], \
+                  all_rel_data[i * batch_size: (i + 1) * batch_size], \
+                  all_row_col[i * batch_size: (i + 1) * batch_size], \
+                  segment_length[i * batch_size: (i + 1) * batch_size], \
 
-            all_adj_mat = self._merge_sparse_submatrices([_rel_data], [_row_col], [_segment])
+            _max_len = max(_segment)
+            all_adj_mat = self._merge_sparse_submatrices(_rel_data, _row_col, _segment)
 
             feed_dict = {
-                self.node_input_ph: _node_tensor,
+                self.node_input_ph: np.concatenate(_node_tensor, axis=0),
+                **{self.adj_mat_ph[i]: all_adj_mat[i] for i in range(4)},
+                self.max_len: _max_len,
+                self.segment_length: _segment,
+                self.is_training_ph: False
+            }
+            preds.append(self.sess.run(self.prediction, feed_dict))
+
+        return np.concatenate(np.array(preds), axis=0)
+
+    def integrated_gradients(self, X, y, ids, interp_steps=100, save_path=None, max_plots=np.inf):
+        counter = 0
+        for _node_tensor, _rel_data, _row_col, _segment, _, _label, _id in zip(*X, y, ids):
+            if np.max(_label) == 0:
+                continue
+            if counter >= max_plots:
+                break
+            _meshed_node_tensor = np.array([self.embedding_vec[idx] for idx in _node_tensor])
+            _meshed_reference_input = np.zeros_like(_meshed_node_tensor)
+            new_node_tensor = []
+            for i in range(0, interp_steps + 1):
+                new_node_tensor.append(
+                    _meshed_reference_input + i / interp_steps * (_meshed_node_tensor - _meshed_reference_input))
+            all_adj_mat = self._merge_sparse_submatrices([_rel_data] * (interp_steps + 1),
+                                                         [_row_col] * (interp_steps + 1),
+                                                         [_segment] * (interp_steps + 1))
+
+            feed_dict = {
+                self.node_tensor: np.concatenate(np.array(new_node_tensor), axis=0),
                 **{self.adj_mat_ph[i]: all_adj_mat[i] for i in range(4)},
                 self.max_len: _segment,
-                self.segment_length: [_segment],
+                self.segment_length: [_segment] * (interp_steps + 1),
                 self.is_training_ph: False
             }
 
-            feed_tensor = [self.prediction]
+            grads = self.sess.run(self.g_nodes, feed_dict).reshape((interp_steps + 1, _segment, 4))
+            grads = (grads[:-1] + grads[1:]) / 2.0
+            node_scores = np.average(grads, axis=0) * (_meshed_node_tensor - _meshed_reference_input)
 
-            if y is not None:
-                feed_dict[self.labels] = [y[i]]
-                feed_tensor += [self.acc_update_op, self.auc_update_op]
+            pos_idx = np.where(_label == 1)[0]
+            extended_start = max(pos_idx[0] - 50, 0)
+            extended_end = min(pos_idx[-1] + 50, _segment)
+            extended_region = [extended_start, extended_end]
+            viewpoint_region = [pos_idx[0] - extended_start, pos_idx[-1] - extended_start + 1]
 
-            all_predicton.append(self.sess.run(feed_tensor, feed_dict)[0])
-        all_predicton = np.concatenate(all_predicton, axis=0)
-
-        if y is not None:
-            acc, auc = self.sess.run([self.acc_val, self.auc_val])
-            self.sess.run(self.local_init)
-            return all_predicton, acc, auc
-        else:
-            return all_predicton
+            if save_path is not None:
+                saveto = os.path.join(save_path, '%s.jpg' % (_id))
+            else:
+                saveto = None
+            lib.plot.plot_weights(node_scores[range(*extended_region)],
+                                  subticks_frequency=10, highlight={'r': [viewpoint_region]},
+                                  save_path=saveto)
+            counter += 1
 
     def delete(self):
         tf.reset_default_graph()
