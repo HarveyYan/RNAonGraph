@@ -123,8 +123,8 @@ def Logger(q):
         # print('here')
 
 
-def run_one_rbp(idx, q):
-    fold_output = os.path.join(output_dir, 'fold%d' % (idx))
+def run_one_rbp(fold_idx, q):
+    fold_output = os.path.join(output_dir, 'fold%d' % (fold_idx))
     os.makedirs(fold_output)
 
     outfile = open(os.path.join(fold_output, str(os.getpid())) + ".out", "w")
@@ -147,8 +147,8 @@ def run_one_rbp(idx, q):
         q.put(msg)
         time.sleep(np.random.rand() * 2)
 
-    print('training fold', idx)
-    train_idx, test_idx = dataset['splits'][idx]
+    print('training fold', fold_idx)
+    train_idx, test_idx = dataset['splits'][fold_idx]
     model = JSMRGCN(dataset['VOCAB_VEC'].shape[1], len(lib.graphprot_dataloader.BOND_TYPE) - 1,
                     # excluding no bond
                     dataset['VOCAB_VEC'], device, **hp)
@@ -173,21 +173,37 @@ def run_one_rbp(idx, q):
           (original_acc, original_auc))
 
     # get predictions
-    np.save(os.path.join(fold_output, 'predictions.npy'), model.predict(original_test_data, BATCH_SIZE))
+    logger = lib.logger.CSVLogger('predictions.csv', fold_output,
+                                  ['id', 'label', 'pred_neg', 'pred_pos'])
+    for _id, _label, _pred in zip(original_dataset['id'][test_idx], original_dataset['label'][test_idx],
+                                  model.predict(original_test_data, BATCH_SIZE)):
+        logger.update_with_dict({
+            'id': _id,
+            'label': np.max(_label),
+            'pred_neg': _pred[0],
+            'pred_pos': _pred[1],
+        })
+    logger.close()
 
     # plot some motifs
     graph_dir = os.path.join(fold_output, 'integrated_gradients')
     if not os.path.exists(graph_dir):
         os.makedirs(graph_dir)
 
-    model.integrated_gradients(original_test_data, original_dataset['label'][test_idx],
-                               original_dataset['id'][test_idx], save_path=graph_dir, max_plots=200)
+    idx = []
+    for i, _id in enumerate(original_dataset['id'][test_idx]):
+        if _id in ig_ids:
+            idx.append(i)
+
+    model.integrated_gradients(model.indexing_iterable(original_test_data, idx),
+                               original_dataset['label'][test_idx][idx],
+                               original_dataset['id'][test_idx][idx], save_path=graph_dir)
 
     model.delete()
     reload(lib.plot)
     reload(lib.logger)
     q.put({
-        'fold': idx,
+        'fold': fold_idx,
         'seq_acc': acc[0],
         'gnn_nuc_acc': acc[1],
         'bilstm_nuc_acc': acc[2],
@@ -204,9 +220,9 @@ if __name__ == "__main__":
     cur_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     if FLAGS.output_dir == '':
-        output_dir = os.path.join('output', 'Joint-SMRGCN-Graphprot', cur_time)
+        output_dir = os.path.join('output', 'Joint-SMRGCN-Graphprot-debiased', cur_time)
     else:
-        output_dir = os.path.join('output', 'Joint-SMRGCN-Graphprot', cur_time + '-' + FLAGS.output_dir)
+        output_dir = os.path.join('output', 'Joint-SMRGCN-Graphprot-debiased', cur_time + '-' + FLAGS.output_dir)
 
     os.makedirs(output_dir)
     lib.plot.set_output_dir(output_dir)
@@ -234,6 +250,9 @@ if __name__ == "__main__":
                                                fold_algo=FLAGS.fold_algo,
                                                probabilistic=FLAGS.probabilistic, w=FLAGS.folding_winsize,
                                                nucleotide_label=True, modify_leaks=False)[0]  # load one at a time
+
+    # First 400 positive examples, same for the CNN model and the GNN model
+    ig_ids = list(original_dataset['id'][:400])
 
     np.save(os.path.join(output_dir, 'splits.npy'), dataset['splits'])
     manager = mp.Manager()
