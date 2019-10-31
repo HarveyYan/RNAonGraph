@@ -1,5 +1,6 @@
 import tensorflow as tf
 from lib.ops.Linear import linear
+from lib.ops.Conv1D import conv1d
 
 
 def graph_convolution_layers(name, inputs, units, reuse=True):
@@ -136,6 +137,59 @@ def sparse_graph_convolution_layers(name, inputs, units, reuse=True):
                               annotations, biases=False, variables_on_cpu=False)
             output.append(tf.sparse_tensor_dense_matmul(adj_tensor[i], msg_bond))
         output = tf.add_n(output) / nb_bonds
+        # self-connection \approx residual connection
+        output = output + linear('self-connect', input_dim, units, annotations, variables_on_cpu=False)
+        return output  # messages
+
+
+def sparse_att_gcl(name, inputs, units, reuse=True):
+    with tf.variable_scope(name, reuse=tf.AUTO_REUSE if reuse else False):
+        # adj_tensor: list (size nb_bonds) of [length, length] matrices
+        adj_tensor, hidden_tensor, node_tensor = inputs
+        annotations = hidden_tensor if hidden_tensor is not None else node_tensor
+        input_dim = annotations.get_shape().as_list()[-1]
+        nb_bonds = len(adj_tensor)
+        output = []
+        for i in range(nb_bonds):
+            # the first two are covalent bonds, doesn't make sense to compute attention
+            msg_bond = linear('lt_bond_%d' % (i + 1), input_dim, units,
+                              annotations, biases=False, variables_on_cpu=False)
+            if i in [0, 1]:
+                output.append(tf.sparse_tensor_dense_matmul(adj_tensor[i], msg_bond))
+            else:
+                # not feasible given current implementation,
+                # unless an additional batch_size dimension is maintained to reduce the space complexity
+                f_1 = tf.layers.conv1d(annotations[None, :, :], 1, 1, name='att_linear_left_%d' % (i))[0]
+                f_2 = tf.layers.conv1d(annotations[None, :, :], 1, 1, name='att_linear_right_%d' % (i))[0]
+                logits = f_1 + tf.transpose(f_2, [1, 0])
+                coefs = adj_tensor[i] * tf.nn.softmax(tf.nn.leaky_relu(logits))
+                output.append(tf.sparse_tensor_dense_matmul(coefs, msg_bond))
+        output = tf.add_n(output) / nb_bonds
+        # self-connection \approx residual connection
+        output = output + linear('self-connect', input_dim, units, annotations, variables_on_cpu=False)
+        return output  # messages
+
+
+def joint_layer(name, inputs, units, reuse=True):
+    '''
+    1. undirectional
+    2. convalent adjacency matrix is unrolled 10 times
+    '''
+    with tf.variable_scope(name, reuse=tf.AUTO_REUSE if reuse else False):
+        # adj_tensor: list (size nb_bonds) of [length, length] matrices
+        adj_tensor, hidden_tensor, node_tensor = inputs
+        annotations = hidden_tensor if hidden_tensor is not None else node_tensor
+        input_dim = annotations.get_shape().as_list()[-1]
+
+        output = []
+        msg_bond = linear('hydro_bond', input_dim, units,
+                          annotations, biases=False, variables_on_cpu=False)
+        output.append(tf.sparse_tensor_dense_matmul(adj_tensor, msg_bond))
+
+        output.append(conv1d('conv1', input_dim, units, 10, annotations[None, :, :], biases=False,
+                             pad_mode='SAME', variables_on_cpu=False)[0, :, :])
+
+        output = tf.add_n(output) / 2
         # self-connection \approx residual connection
         output = output + linear('self-connect', input_dim, units, annotations, variables_on_cpu=False)
         return output  # messages

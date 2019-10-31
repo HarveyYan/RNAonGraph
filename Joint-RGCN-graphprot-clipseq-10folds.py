@@ -23,7 +23,6 @@ tf.app.flags.DEFINE_integer('batch_size', 128, '')
 tf.app.flags.DEFINE_bool('share_device', True, '')
 # some experiment settings
 tf.app.flags.DEFINE_bool('use_attention', False, '')
-tf.app.flags.DEFINE_bool('expr_simplified_attention', False, '')
 tf.app.flags.DEFINE_bool('lstm_ggnn', True, '')
 tf.app.flags.DEFINE_bool('use_embedding', False, '')
 tf.app.flags.DEFINE_integer('nb_layers', 10, '')
@@ -75,6 +74,7 @@ hp = {
     'probabilistic': FLAGS.probabilistic,
     'mixing_ratio': FLAGS.mixing_ratio,
     'use_ghm': FLAGS.use_ghm,
+    'use_attention': FLAGS.use_attention,
 }
 
 
@@ -186,7 +186,7 @@ def run_one_rbp(fold_idx, q):
     logger.close()
 
     # plot some motifs
-    graph_dir = os.path.join(fold_output, 'integrated_gradients')
+    graph_dir = os.path.join(output_dir, 'integrated_gradients')
     if not os.path.exists(graph_dir):
         os.makedirs(graph_dir)
 
@@ -252,7 +252,7 @@ if __name__ == "__main__":
                                                nucleotide_label=True, modify_leaks=False)[0]  # load one at a time
 
     # First 400 positive examples, same for the CNN model and the GNN model
-    ig_ids = list(original_dataset['id'][:400])
+    ig_ids = list(original_dataset['id'][:40])
 
     np.save(os.path.join(output_dir, 'splits.npy'), dataset['splits'])
     manager = mp.Manager()

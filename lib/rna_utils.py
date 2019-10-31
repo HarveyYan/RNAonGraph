@@ -458,7 +458,7 @@ def fold_rna_from_file(filepath, p=None, fold_algo='rnafold', probabilistic=Fals
     elif fold_algo == 'rnaplfold':
         winsize = kwargs.get('w', 150)
         print('running rnaplfold with winsize %d' % (winsize))
-        fold_func = partial(fold_seq_rnaplfold, w=winsize, l=winsize, cutoff=1e-4, no_lonely_bps=True)
+        fold_func = partial(fold_seq_rnaplfold, w=winsize, l=min(winsize, 150), cutoff=1e-4, no_lonely_bps=True)
         res = list(pool.imap(fold_func, all_seq))
         sp_rel_matrix = []
         sp_prob_matrix = []

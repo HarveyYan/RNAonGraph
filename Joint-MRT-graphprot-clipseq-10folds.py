@@ -96,11 +96,10 @@ def Logger(q):
                     q.put('master_%d_/cpu:0' % (process_id))
         elif type(msg) is dict:
             logger.update_with_dict(msg)
-            all_auc.append(msg['auc'])
+            all_auc.append(msg['original_auc'])
         else:
             q.put(msg)
         time.sleep(np.random.rand() * 5)
-        # print('here')
 
 
 def run_one_rbp(fold_idx, q):
@@ -142,19 +141,25 @@ def run_one_rbp(fold_idx, q):
                           original_dataset['raw_seq'][test_idx]]
     original_cost, original_acc, original_auc = model.evaluate(original_test_data, original_dataset['label'][test_idx],
                                                                BATCH_SIZE, random_crop=False)
-    print('Evaluation (with masking) on original held-out test set, acc: %s, auc: %.3f' % (acc, auc))
+    print('Evaluation (with masking) on original held-out test set, acc: %s, auc: %.3f' % (original_acc, original_auc))
 
     # get predictions
     logger = lib.logger.CSVLogger('predictions.csv', fold_output,
                                   ['id', 'label', 'pred_neg', 'pred_pos'])
-    for _id, _label, _pred in zip(original_dataset['id'][test_idx], original_dataset['label'][test_idx],
-                                  model.predict(original_test_data, BATCH_SIZE)):
+    all_pos_preds = []
+    all_idx = []
+    for idx, (_id, _label, _pred) in enumerate(
+            zip(original_dataset['id'][test_idx], original_dataset['label'][test_idx],
+                model.predict(original_test_data, BATCH_SIZE))):
         logger.update_with_dict({
             'id': _id,
             'label': np.max(_label),
             'pred_neg': _pred[0],
             'pred_pos': _pred[1],
         })
+        if np.max(_label) == 1:
+            all_pos_preds.append(_pred[1])
+            all_idx.append(idx)
     logger.close()
 
     # plot some motifs
@@ -162,10 +167,10 @@ def run_one_rbp(fold_idx, q):
     if not os.path.exists(graph_dir):
         os.makedirs(graph_dir)
 
-    idx = []
-    for i, _id in enumerate(original_dataset['id'][test_idx]):
-        if _id in ig_ids:
-            idx.append(i)
+    all_pos_preds = np.array(all_pos_preds)
+    all_idx = np.array(all_idx)
+    # top 10 strongly predicted examples
+    idx = all_idx[np.argsort(all_pos_preds)[:min(10, len(all_pos_preds))]]
 
     model.integrated_gradients(model.indexing_iterable(original_test_data, idx),
                                original_dataset['label'][test_idx][idx],
@@ -217,8 +222,8 @@ if __name__ == "__main__":
             [TRAIN_RBP_ID], use_embedding=FLAGS.use_embedding,
             load_mat=False, nucleotide_label=True, modify_leaks=False)[0]
 
-    # First 400 positive examples, same for the CNN model and the GNN model
-    ig_ids = list(original_dataset['id'][:400])
+    # # First 400 positive examples, same for the CNN model and the GNN model
+    # ig_ids = list(original_dataset['id'][:40])
 
     np.save(os.path.join(output_dir, 'splits.npy'), dataset['splits'])
     manager = mp.Manager()

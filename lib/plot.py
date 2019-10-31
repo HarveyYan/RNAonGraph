@@ -3,7 +3,7 @@ import os
 import matplotlib
 import matplotlib.pyplot as plt
 
-plt.style.use('ggplot')
+plt.style.use('classic')
 matplotlib.rcParams.update({'figure.figsize': [10.0, 10.0], 'font.family': 'Times New Roman', 'figure.dpi': 350})
 matplotlib.rcParams['agg.path.chunksize'] = 1e10
 import collections
@@ -56,7 +56,7 @@ def flush():
             plt.fill_between(x_vals, y_vals[:, 0] - y_vals[:, 1], y_vals[:, 0] + y_vals[:, 1], alpha=0.5)
         plt.xlabel('epoch')
         plt.ylabel(name)
-        plt.savefig(os.path.join(_output_dir, name.replace(' ', '_') + '.jpg'))
+        plt.savefig(os.path.join(_output_dir, name.replace(' ', '_') + '.jpg'), dpi=350)
 
     if _stdout:
         print("epoch {}\t{}".format(_iter[0], "\t".join(prints)))
@@ -141,8 +141,24 @@ def plot_t(ax, base, left_edge, height, color):
                                               fill=True))
 
 
+def plot_u(ax, base, left_edge, height, color):
+    ax.add_patch(matplotlib.patches.Ellipse(xy=[left_edge + 0.5, base + 0.3 * height], width=1., height=0.6*height,
+                                            facecolor=color, edgecolor=color))
+    ax.add_patch(
+        matplotlib.patches.Ellipse(xy=[left_edge + 0.5, base + 0.3 * height], width=0.7 * 1., height=0.7 * 0.6 * height,
+                                   facecolor='white', edgecolor='white'))
+    ax.add_patch(matplotlib.patches.Rectangle(xy=[left_edge, base + 0.3 * height], width=1.0, height=0.7 * height,
+                                              facecolor='white', edgecolor='white', fill=True))
+
+    ax.add_patch(matplotlib.patches.Rectangle(xy=[left_edge, base + 0.29 * height], width=0.01, height=0.71 * height,
+                                              facecolor=color, edgecolor=color, fill=True))
+
+    ax.add_patch(matplotlib.patches.Rectangle(xy=[left_edge+0.95, base + 0.29 * height], width=0.05, height=0.71 * height,
+                                              facecolor=color, edgecolor=color, fill=True))
+
+
 default_colors = {0: 'green', 1: 'blue', 2: 'orange', 3: 'red'}
-default_plot_funcs = {0: plot_a, 1: plot_c, 2: plot_g, 3: plot_t}
+default_plot_funcs = {0: plot_a, 1: plot_c, 2: plot_g, 3: plot_u}
 
 
 def plot_weights_given_ax(ax, array,
@@ -223,5 +239,5 @@ def plot_weights(array,
     if save_path is None:
         plt.show()
     else:
-        plt.savefig(save_path)
+        plt.savefig(save_path, dpi=350)
     plt.close(fig)

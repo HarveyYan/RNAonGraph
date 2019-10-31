@@ -1,8 +1,10 @@
 import os
 import sys
 import time
+import math
 import numpy as np
 import tensorflow as tf
+from lib.AMSGrad import AMSGrad
 
 basedir = os.path.split(os.path.dirname(os.path.abspath(__file__)))[0]
 sys.path.append(basedir)
@@ -13,7 +15,6 @@ from lib.rgcn_utils import normalize
 import lib.plot, lib.logger, lib.clr
 import lib.ops.LSTM, lib.ops.Linear, lib.ops.Conv1D
 from lib.tf_ghm_loss import get_ghm_weights
-from lib.AMSGrad import AMSGrad
 
 
 class JMRT:
@@ -46,10 +47,15 @@ class JMRT:
                     0.9, use_nesterov=True
                 )
             else:
+                # self.optimizer = tf.contrib.opt.AdamWOptimizer(
+                #     1e-4,
+                #     learning_rate=self.learning_rate * self.lr_multiplier,
+                # )
                 self.optimizer = AMSGrad(
-                    learning_rate=self.learning_rate * self.lr_multiplier,
+                    self.learning_rate * self.lr_multiplier,
                     beta2=0.999
                 )
+
 
             with tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
                 self._build_ggnn()
@@ -59,7 +65,7 @@ class JMRT:
                 with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
                     self.train_op = self.optimizer.apply_gradients(self.gv)
                 _stats('Joint_MRT', self.gv)
-                self.saver = tf.train.Saver(max_to_keep=10)
+                self.saver = tf.train.Saver(max_to_keep=5)
                 self.init = tf.global_variables_initializer()
                 self.local_init = tf.local_variables_initializer()
                 self.g.finalize()
@@ -213,7 +219,7 @@ class JMRT:
     def reset_session(self):
         del self.saver
         with self.g.as_default():
-            self.saver = tf.train.Saver(max_to_keep=10)
+            self.saver = tf.train.Saver(max_to_keep=5)
         self.sess.run(self.init)
         self.sess.run(self.local_init)
         lib.plot.reset()
@@ -234,10 +240,10 @@ class JMRT:
                 pos_idx = np.where(label == 1)[0]
                 # keep more than 3/4 of the sequence (length), and random start
                 read_length = len(pos_idx)
-                winsize = np.random.choice(
-                    range(int(max(pos_read_retention_rate, np.random.rand()) * read_length), read_length + 1)
-                )
-                start_idx = np.random.choice(range(read_length - winsize + 1))
+                rate = min(max(pos_read_retention_rate, np.random.rand()), 0.9)
+                winsize = int(rate * read_length)
+                surplus = read_length - winsize + 1
+                start_idx = np.random.choice(range(int(surplus / 4), math.ceil(surplus * 3 / 4)))
                 label = [0] * (pos_idx[0] + start_idx) + [1] * winsize + [0] * \
                         (len(seq) - winsize - start_idx - pos_idx[0])
 
@@ -421,7 +427,6 @@ class JMRT:
 
     def integrated_gradients(self, X, y, ids, interp_steps=100, save_path=None, max_plots=np.inf):
         counter = 0
-        print('begins')
         for _node_tensor, _segment, _, _label, _id in zip(*X, y, ids):
             if np.max(_label) == 0:
                 continue

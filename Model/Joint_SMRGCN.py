@@ -13,7 +13,7 @@ sys.path.append(basedir)
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from Model import _stats
-from lib.rgcn_utils import sparse_graph_convolution_layers, normalize
+from lib.rgcn_utils import sparse_graph_convolution_layers, sparse_att_gcl, normalize
 import lib.plot, lib.logger, lib.clr
 import lib.ops.LSTM, lib.ops.Linear, lib.ops.Conv1D
 from lib.tf_ghm_loss import get_ghm_weights
@@ -43,7 +43,7 @@ class BackgroundGenerator(threading.Thread):
             if self.random_crop:
                 # augmentation
                 node_tensor, all_rel_data, all_row_col, segment_length, y = \
-                    JSMRGCN.random_crop(node_tensor, all_rel_data, all_row_col, raw_seq, y, outer_truncation=True)
+                    JSMRGCN.random_crop(node_tensor, all_rel_data, all_row_col, raw_seq, y, outer_truncation=False)
             for i in range(self.iters_per_epoch):
                 _node_tensor, _rel_data, _row_col, _segment, _labels \
                     = node_tensor[i * self.batch_size: (i + 1) * self.batch_size], \
@@ -84,6 +84,7 @@ class JSMRGCN:
         self.reuse_weights = kwargs.get('reuse_weights', False)
         self.lstm_ggnn = kwargs.get('lstm_ggnn', False)
         self.probabilistic = kwargs.get('probabilistic', True)
+        self.use_attention = kwargs.get('use_attention', False)
 
         self.mixing_ratio = kwargs.get('mixing_ratio', 0.)
         self.use_ghm = kwargs.get('use_ghm', False)
@@ -97,10 +98,14 @@ class JSMRGCN:
                     0.9, use_nesterov=True
                 )
             else:
-                self.optimizer = AMSGrad(
-                    learning_rate=self.learning_rate * self.lr_multiplier,
-                    beta2=0.999
+                self.optimizer = tf.contrib.opt.AdamWOptimizer(
+                    1e-4,
+                    learning_rate=self.learning_rate * self.lr_multiplier
                 )
+                # self.optimizer = AMSGrad(
+                #     learning_rate=self.learning_rate * self.lr_multiplier,
+                #     beta2=0.999
+                # )
 
             with tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
                 self._build_ggnn()
@@ -110,7 +115,7 @@ class JSMRGCN:
                 with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
                     self.train_op = self.optimizer.apply_gradients(self.gv)
                 _stats('Joint_SMRGCN', self.gv)
-                self.saver = tf.train.Saver(max_to_keep=10)
+                self.saver = tf.train.Saver(max_to_keep=5)
                 self.init = tf.global_variables_initializer()
                 self.local_init = tf.local_variables_initializer()
         self._init_session()
@@ -128,10 +133,21 @@ class JSMRGCN:
         self.global_step = tf.placeholder(tf.int32, ())
         self.hf_iters_per_epoch = tf.placeholder(tf.int32, ())
         if self.use_clr:
+            print('using cyclic learning rate')
             self.lr_multiplier = lib.clr. \
                 cyclic_learning_rate(self.global_step, 0.5, 5.,
                                      self.hf_iters_per_epoch, mode='exp_range')
         else:
+            # print('using exponential decay with rate 0.995')
+            # self.lr_multiplier = tf.compat.v1.train.exponential_decay(
+            #     1.,
+            #     self.global_step,
+            #     self.hf_iters_per_epoch,
+            #     0.997,
+            #     staircase=True,
+            #     name=None
+            # )
+            print('using constant learning rate')
             self.lr_multiplier = 1.
         # self.mixing_ratio_var = tf.placeholder_with_default(self.mixing_ratio, ())
 
@@ -164,8 +180,12 @@ class JSMRGCN:
             for i in range(self.layers):
                 name = 'graph_convolution' if self.reuse_weights else 'graph_convolution_%d' % (i + 1)
                 # variables for sparse implementation default placement to gpu
-                msg_tensor = sparse_graph_convolution_layers(name, (self.adj_mat_ph, hidden_tensor, node_tensor),
-                                                             self.units, reuse=self.reuse_weights)
+                if self.use_attention:
+                    msg_tensor = sparse_att_gcl(name, (self.adj_mat_ph, hidden_tensor, node_tensor),
+                                                self.units, reuse=self.reuse_weights)
+                else:
+                    msg_tensor = sparse_graph_convolution_layers(name, (self.adj_mat_ph, hidden_tensor, node_tensor),
+                                                                 self.units, reuse=self.reuse_weights)
                 msg_tensor = normalize('Norm' if self.reuse_weights else 'Norm%d' % (i + 1),
                                        msg_tensor, self.use_bn, self.is_training_ph)
                 msg_tensor = tf.nn.leaky_relu(msg_tensor)
@@ -323,7 +343,7 @@ class JSMRGCN:
     def reset_session(self):
         del self.saver
         with self.g.as_default():
-            self.saver = tf.train.Saver(max_to_keep=10)
+            self.saver = tf.train.Saver(max_to_keep=5)
         self.sess.run(self.init)
         self.sess.run(self.local_init)
         lib.plot.reset()
@@ -450,7 +470,7 @@ class JSMRGCN:
                                            'dev_cost', 'dev_graph_cost', 'dev_gnn_cost', 'dev_bilstm_cost',
                                            'dev_seq_acc', 'dev_gnn_acc', 'dev_bilstm_acc', 'dev_auc'])
 
-        train_generator = BackgroundGenerator(X, train_targets, batch_size)
+        train_generator = BackgroundGenerator(X, train_targets, batch_size, random_crop=False)
         val_generator = BackgroundGenerator(dev_data, dev_targets, batch_size)
         iters_per_epoch = train_generator.iters_per_epoch
 
@@ -556,7 +576,7 @@ class JSMRGCN:
         if random_crop:
             # augmentation
             node_tensor, all_rel_data, all_row_col, segment_length, y = \
-                self.random_crop(node_tensor, all_rel_data, all_row_col, raw_seq, y)
+                self.random_crop(node_tensor, all_rel_data, all_row_col, raw_seq, y, outer_truncation=False)
         all_cost, all_graph_cost, all_gnn_nuc_cost, all_bilstm_nuc_cost = 0., 0., 0., 0.
         iters_per_epoch = len(node_tensor) // batch_size + (0 if len(node_tensor) % batch_size == 0 else 1)
         for i in range(iters_per_epoch):

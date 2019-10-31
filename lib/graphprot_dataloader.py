@@ -131,23 +131,18 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
                         pos_idx = np.where(np.array(label) == 1)[0]
                     else:
                         pos_idx = np.where((np.array(seq) <= 'Z').astype(np.int32) == 1)[0]
-
-                    if rbp == 'PARCLIP_IGF2BP123':
-                        indices = [pos_idx[-1], pos_idx[0], pos_idx[0] - 1, pos_idx[0] - 2]
-                    elif rbp == 'CAPRIN1_Baltz2012':
-                        indices = [pos_idx[-1], pos_idx[-1] - 1, pos_idx[0], pos_idx[0] - 1, pos_idx[0] - 2]
-                    elif rbp == 'PARCLIP_PUM2':
-                        # unable to obtain perfect mask
-                        indices = [pos_idx[-1], pos_idx[0] - 1]
-                    elif rbp == 'PARCLIP_AGO1234':
-                        # unable to obtain perfect mask
-                        indices = [pos_idx[-1], pos_idx[0] - 1]
-                    elif rbp == 'PARCLIP_MOV10_Sievers':
-                        indices = [pos_idx[-1], pos_idx[-1] - 1, pos_idx[0] - 1]
-                    elif rbp == 'ZC3H7B_Baltz2012':
-                        indices = [pos_idx[-1], pos_idx[-1] - 1, pos_idx[0] + 1, pos_idx[0], pos_idx[0] - 1]
+                    # overkill for PARCLIP_ELAVL1A, CLIPSEQ_AGO2, CLIPSEQ_ELAVL1
+                    if rbp in ['CAPRIN1_Baltz2012', 'PARCLIP_IGF2BP123', 'PARCLIP_MOV10_Sievers', 'ZC3H7B_Baltz2012',
+                               'C22ORF28_Baltz2012', 'PARCLIP_ELAVL1A', 'PARCLIP_TAF15', 'PARCLIP_FUS', 'PARCLIP_EWSR1',
+                               'PARCLIP_HUR', 'PARCLIP_PUM2', 'PARCLIP_AGO1234', 'ALKBH5_Baltz2012',
+                               'C17ORF85_Baltz2012', 'PARCLIP_QKI', 'PARCLIP_ELAVL1', 'CLIPSEQ_SFRS1', 'CLIPSEQ_AGO2',
+                               'CLIPSEQ_ELAVL1']:
+                        indices = [pos_idx[-1] - 1, pos_idx[-1], pos_idx[-1] + 1, pos_idx[0], pos_idx[0] - 1,
+                                   pos_idx[0] - 2]
+                    elif rbp in ['ICLIP_HNRNPC', 'ICLIP_TDP43', 'ICLIP_TIA1', 'ICLIP_TIAL1', 'PTBv1']:
+                        raise ValueError('Warning, %s is not biased...' % (rbp))
                     else:
-                        raise ValueError('TODO: modify_leaks option has not been made available for %s' % (rbp))
+                        raise ValueError('unrecognized %s for the modify_leaks option' % (rbp))
 
                     for idx in indices:
                         try:
