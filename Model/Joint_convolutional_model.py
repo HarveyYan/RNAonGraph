@@ -13,7 +13,7 @@ sys.path.append(basedir)
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from Model import _stats
-from lib.rgcn_utils import sparse_graph_convolution_layers, sparse_att_gcl, normalize
+from lib.rgcn_utils import joint_layer, normalize
 import lib.plot, lib.logger, lib.clr
 import lib.ops.LSTM, lib.ops.Linear, lib.ops.Conv1D
 from lib.tf_ghm_loss import get_ghm_weights
@@ -36,14 +36,16 @@ class BackgroundGenerator(threading.Thread):
         self.start()
 
     def run(self):
-        while not self.kill.is_set():
+        while True:
             permute = np.random.permutation(self.size_train)
-            node_tensor, all_rel_data, all_row_col, segment_length, raw_seq = JSMRGCN.indexing_iterable(self.X, permute)
+            node_tensor, all_rel_data, all_row_col, segment_length, raw_seq = JointConvolutional.indexing_iterable(
+                self.X, permute)
             y = self.y[permute]
             if self.random_crop:
                 # augmentation
                 node_tensor, all_rel_data, all_row_col, segment_length, y = \
-                    JSMRGCN.random_crop(node_tensor, all_rel_data, all_row_col, raw_seq, y, outer_truncation=False)
+                    JointConvolutional.random_crop(node_tensor, all_rel_data, all_row_col, raw_seq, y,
+                                                   outer_truncation=False)
             for i in range(self.iters_per_epoch):
                 _node_tensor, _rel_data, _row_col, _segment, _labels \
                     = node_tensor[i * self.batch_size: (i + 1) * self.batch_size], \
@@ -54,26 +56,32 @@ class BackgroundGenerator(threading.Thread):
 
                 _max_len = max(_segment)
                 _labels = np.array([np.pad(label, [_max_len - len(label), 0], mode='constant') for label in _labels])
-                all_adj_mat = JSMRGCN._merge_sparse_submatrices(_rel_data, _row_col, _segment)
+                all_adj_mat = JointConvolutional._merge_sparse_submatrices(_rel_data, _row_col, _segment)
                 self.queue.put([np.concatenate(_node_tensor, axis=0), _segment, _max_len, all_adj_mat, _labels])
+                if self.kill.is_set():
+                    self.queue.close()
+                    while not self.queue.empty():
+                        self.queue.get()
+                    print('data generator thread is terminated')
+                    self.queue.join_thread()
+                    return
+
 
     def next(self):
         next_item = self.queue.get()
         return next_item
 
 
-class JSMRGCN:
+class JointConvolutional:
 
-    def __init__(self, node_dim, edge_dim, embedding_vec, gpu_device, **kwargs):
+    def __init__(self, node_dim, embedding_vec, gpu_device, **kwargs):
         self.node_dim = node_dim
-        self.edge_dim = edge_dim
         self.embedding_vec = embedding_vec
         self.vocab_size = embedding_vec.shape[0]
         self.gpu_device = gpu_device
-        assert (self.edge_dim == 4)
         # hyperparams
         self.units = kwargs.get('units', 32)
-        self.layers = kwargs.get('layers', 20)
+        self.layers = kwargs.get('layers', 10)
         self.pool_steps = kwargs.get('pool_steps', 10)
         self.dropout_rate = kwargs.get('dropout_rate', 0.2)
         self.learning_rate = kwargs.get('learning_rate', 2e-4)
@@ -84,7 +92,6 @@ class JSMRGCN:
         self.reuse_weights = kwargs.get('reuse_weights', False)
         self.lstm_ggnn = kwargs.get('lstm_ggnn', False)
         self.probabilistic = kwargs.get('probabilistic', True)
-        self.use_attention = kwargs.get('use_attention', False)
 
         self.mixing_ratio = kwargs.get('mixing_ratio', 0.)
         self.use_ghm = kwargs.get('use_ghm', False)
@@ -122,7 +129,7 @@ class JSMRGCN:
 
     def _placeholders(self):
         self.node_input_ph = tf.placeholder(tf.int32, shape=[None, ])  # nb_nodes
-        self.adj_mat_ph = [tf.sparse_placeholder(tf.float32, shape=[None, None]) for _ in range(self.edge_dim)]
+        self.adj_mat_ph = tf.sparse_placeholder(tf.float32, shape=[None, None])
         # nb_nodes x nb_nodes
 
         self.labels = tf.placeholder(tf.int32, shape=[None, None, ])
@@ -143,7 +150,7 @@ class JSMRGCN:
             #     1.,
             #     self.global_step,
             #     self.hf_iters_per_epoch,
-            #     0.997,
+            #     0.995,
             #     staircase=True,
             #     name=None
             # )
@@ -178,14 +185,10 @@ class JSMRGCN:
                 cell = tf.contrib.rnn.GRUCell(self.units)
 
             for i in range(self.layers):
-                name = 'graph_convolution' if self.reuse_weights else 'graph_convolution_%d' % (i + 1)
+                name = 'joint_convolutional' if self.reuse_weights else 'joint_convolutional_%d' % (i + 1)
                 # variables for sparse implementation default placement to gpu
-                if self.use_attention:
-                    msg_tensor = sparse_att_gcl(name, (self.adj_mat_ph, hidden_tensor, node_tensor),
-                                                self.units, reuse=self.reuse_weights)
-                else:
-                    msg_tensor = sparse_graph_convolution_layers(name, (self.adj_mat_ph, hidden_tensor, node_tensor),
-                                                                 self.units, reuse=self.reuse_weights)
+                msg_tensor = joint_layer(name, (self.adj_mat_ph, hidden_tensor, node_tensor),
+                                         self.units, reuse=self.reuse_weights)
                 msg_tensor = normalize('Norm' if self.reuse_weights else 'Norm%d' % (i + 1),
                                        msg_tensor, self.use_bn, self.is_training_ph)
                 msg_tensor = tf.nn.leaky_relu(msg_tensor)
@@ -353,32 +356,21 @@ class JSMRGCN:
         '''
         merge sparse submatrices
         '''
-        all_tensors = []
-        for i in [0, 2]:  # forward_covalent, forward_hydrogen
-            all_data, all_row_col = [], []
-            size = 0
-            for _data, _row_col, _segment in zip(data, row_col, segments):
-                all_data.append(_data[i])
-                all_row_col.append(np.array(_row_col[i]) + size)
-                size += _segment
-            all_tensors.append(
-                tf.compat.v1.SparseTensorValue(
-                    np.concatenate(all_row_col),
-                    np.concatenate(all_data),
-                    (size, size)
-                )
-            )
-            # trick, transpose
-            all_tensors.append(
-                tf.compat.v1.SparseTensorValue(
-                    np.concatenate(all_row_col)[:, [1, 0]],
-                    np.concatenate(all_data),
-                    (size, size)
-                )
-            )
 
-        # return 4 matrices, one for each relation, max_len and segment_length
-        return all_tensors
+        all_data, all_row_col = [], []
+        size = 0
+        for _data, _row_col, _segment in zip(data, row_col, segments):
+            all_data.append(_data[2])
+            all_data.append(_data[3])
+            all_row_col.append(np.array(_row_col[2]) + size)
+            all_row_col.append(np.array(_row_col[3]) + size)
+            size += _segment
+
+        return tf.compat.v1.SparseTensorValue(
+            np.concatenate(all_row_col),
+            np.concatenate(all_data),
+            (size, size)
+        )
 
     @classmethod
     def indexing_iterable(cls, iterable, idx):
@@ -483,7 +475,7 @@ class JSMRGCN:
                 _node_tensor, _segment, _max_len, all_adj_mat, _labels = train_generator.next()
                 feed_dict = {
                     self.node_input_ph: _node_tensor,
-                    **{self.adj_mat_ph[i]: all_adj_mat[i] for i in range(4)},
+                    self.adj_mat_ph: all_adj_mat,
                     self.labels: _labels,
                     self.max_len: _max_len,
                     self.segment_length: _segment,
@@ -543,8 +535,10 @@ class JSMRGCN:
             logger.close()
         train_generator.kill.set()
         val_generator.kill.set()
-        train_generator.join(1)
-        val_generator.join(1)
+        train_generator.next()
+        val_generator.next()
+        train_generator.join()
+        val_generator.join()
 
     def evaluate_with_generator(self, generator):
         all_cost, all_graph_cost, all_gnn_nuc_cost, all_bilstm_nuc_cost = 0., 0., 0., 0.
@@ -553,7 +547,7 @@ class JSMRGCN:
 
             feed_dict = {
                 self.node_input_ph: _node_tensor,
-                **{self.adj_mat_ph[i]: all_adj_mat[i] for i in range(4)},
+                self.adj_mat_ph: all_adj_mat,
                 self.labels: _labels,
                 self.max_len: _max_len,
                 self.segment_length: _segment,
@@ -593,7 +587,7 @@ class JSMRGCN:
 
             feed_dict = {
                 self.node_input_ph: np.concatenate(_node_tensor, axis=0),
-                **{self.adj_mat_ph[i]: all_adj_mat[i] for i in range(4)},
+                self.adj_mat_ph: all_adj_mat,
                 self.labels: _labels,
                 self.max_len: _max_len,
                 self.segment_length: _segment,
@@ -627,7 +621,7 @@ class JSMRGCN:
 
             feed_dict = {
                 self.node_input_ph: np.concatenate(_node_tensor, axis=0),
-                **{self.adj_mat_ph[i]: all_adj_mat[i] for i in range(4)},
+                self.adj_mat_ph: all_adj_mat,
                 self.max_len: _max_len,
                 self.segment_length: _segment,
                 self.is_training_ph: False
@@ -655,7 +649,7 @@ class JSMRGCN:
 
             feed_dict = {
                 self.node_tensor: np.concatenate(np.array(new_node_tensor), axis=0),
-                **{self.adj_mat_ph[i]: all_adj_mat[i] for i in range(4)},
+                self.adj_mat_ph: all_adj_mat,
                 self.max_len: _segment,
                 self.segment_length: [_segment] * (interp_steps + 1),
                 self.is_training_ph: False

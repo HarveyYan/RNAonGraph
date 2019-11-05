@@ -274,6 +274,28 @@ def pretrain_word2vec(seqs, kmer_len, window, embedding_size, save_path):
     model.save(save_path)
 
 
+def load_short_seq(fixed_length, size):
+    tmp_seqs = lib.rna_utils.load_seq(os.path.join(basedir, 'Data/misc/utrs.fa'))[1]
+    VOCAB = ['NOT_FOUND', 'A', 'C', 'G', 'T']
+    VOCAB_VEC = np.array([[0, 0, 0, 0], [1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]).astype(
+        np.float32)
+    dataset = {
+        'VOCAB': VOCAB,
+        'VOCAB_VEC': VOCAB_VEC
+    }
+    all_seq = []
+    for line in tmp_seqs:
+        seq = line.upper().replace('U', 'T')
+        if 'N' in seq:
+            continue
+        for i in range(len(seq) // fixed_length):
+            all_seq.append([VOCAB.index(c) for c in seq[i * fixed_length:(i + 1) * fixed_length]])
+        if len(all_seq) > size:
+            break
+    dataset['seq'] = np.array(all_seq)
+    return dataset
+
+
 def test_overlapping(id_list_1, id_list_2):
     identity_list_1, identity_list_2 = [], []
     for _id in id_list_1:

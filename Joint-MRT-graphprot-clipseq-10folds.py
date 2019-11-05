@@ -169,12 +169,26 @@ def run_one_rbp(fold_idx, q):
 
     all_pos_preds = np.array(all_pos_preds)
     all_idx = np.array(all_idx)
-    # top 10 strongly predicted examples
-    idx = all_idx[np.argsort(all_pos_preds)[:min(10, len(all_pos_preds))]]
+    # top 10 strongly predicted examples, descending order
+    idx = all_idx[np.argsort(all_pos_preds)[::-1][:min(10, len(all_pos_preds))]]
 
     model.integrated_gradients(model.indexing_iterable(original_test_data, idx),
                                original_dataset['label'][test_idx][idx],
                                original_dataset['id'][test_idx][idx], save_path=graph_dir)
+
+    # common ig plots
+    idx = []
+    for i, _id in enumerate(dataset['id'][test_idx]):
+        if _id in ig_ids:
+            idx.append(i)
+
+    common_graph_path = os.path.join(output_dir, 'common_integrated_gradients')
+    if not os.path.exists(common_graph_path):
+        os.makedirs(common_graph_path)
+
+    model.integrated_gradients(model.indexing_iterable(original_test_data, idx),
+                               original_dataset['label'][test_idx][idx],
+                               original_dataset['id'][test_idx][idx], save_path=common_graph_path)
 
     model.delete()
     reload(lib.plot)
@@ -223,8 +237,7 @@ if __name__ == "__main__":
             load_mat=False, nucleotide_label=True, modify_leaks=False)[0]
 
     # # First 400 positive examples, same for the CNN model and the GNN model
-    # ig_ids = list(original_dataset['id'][:40])
-
+    ig_ids = list(original_dataset['id'][:20])
     np.save(os.path.join(output_dir, 'splits.npy'), dataset['splits'])
     manager = mp.Manager()
     q = manager.Queue()

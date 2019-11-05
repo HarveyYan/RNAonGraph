@@ -10,7 +10,7 @@ from importlib import reload
 import multiprocessing as mp
 import lib.plot, lib.graphprot_dataloader, lib.rgcn_utils, lib.logger, lib.ops.LSTM, lib.rna_utils
 from lib.general_utils import Pool
-from Model.Joint_SMRGCN import JSMRGCN
+from Model.Joint_convolutional_model import JointConvolutional
 
 tf.logging.set_verbosity(tf.logging.FATAL)
 tf.app.flags.DEFINE_string('output_dir', '', '')
@@ -23,6 +23,7 @@ tf.app.flags.DEFINE_integer('batch_size', 128, '')
 tf.app.flags.DEFINE_bool('share_device', True, '')
 # some experiment settings
 tf.app.flags.DEFINE_bool('use_attention', False, '')
+tf.app.flags.DEFINE_bool('expr_simplified_attention', False, '')
 tf.app.flags.DEFINE_bool('lstm_ggnn', True, '')
 tf.app.flags.DEFINE_bool('use_embedding', False, '')
 tf.app.flags.DEFINE_integer('nb_layers', 10, '')
@@ -74,7 +75,6 @@ hp = {
     'probabilistic': FLAGS.probabilistic,
     'mixing_ratio': FLAGS.mixing_ratio,
     'use_ghm': FLAGS.use_ghm,
-    'use_attention': FLAGS.use_attention,
 }
 
 
@@ -116,7 +116,7 @@ def Logger(q):
                     q.put('master_%d_/cpu:0' % (process_id))
         elif type(msg) is dict:
             logger.update_with_dict(msg)
-            all_auc.append(msg['auc'])
+            all_auc.append(msg['original_auc'])
         else:
             q.put(msg)
         time.sleep(np.random.rand() * 5)
@@ -149,9 +149,9 @@ def run_one_rbp(fold_idx, q):
 
     print('training fold', fold_idx)
     train_idx, test_idx = dataset['splits'][fold_idx]
-    model = JSMRGCN(dataset['VOCAB_VEC'].shape[1], len(lib.graphprot_dataloader.BOND_TYPE) - 1,
-                    # excluding no bond
-                    dataset['VOCAB_VEC'], device, **hp)
+    model = JointConvolutional(dataset['VOCAB_VEC'].shape[1],
+                               # excluding no bond
+                               dataset['VOCAB_VEC'], device, **hp)
 
     train_data = [dataset['seq'][train_idx], dataset['all_data'][train_idx], dataset['all_row_col'][train_idx],
                   dataset['segment_size'][train_idx], dataset['raw_seq'][train_idx]]
@@ -240,9 +240,9 @@ if __name__ == "__main__":
     cur_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     if FLAGS.output_dir == '':
-        output_dir = os.path.join('output', 'Joint-SMRGCN-Graphprot-debiased', cur_time)
+        output_dir = os.path.join('output', 'Joint-convolutional-debiased', cur_time)
     else:
-        output_dir = os.path.join('output', 'Joint-SMRGCN-Graphprot-debiased', cur_time + '-' + FLAGS.output_dir)
+        output_dir = os.path.join('output', 'Joint-convolutional-debiased', cur_time + '-' + FLAGS.output_dir)
 
     os.makedirs(output_dir)
     lib.plot.set_output_dir(output_dir)
@@ -252,7 +252,7 @@ if __name__ == "__main__":
     os.makedirs(backup_dir)
     shutil.copy(__file__, backup_dir)
     shutil.copy(inspect.getfile(lib.rgcn_utils), backup_dir)
-    shutil.copy(inspect.getfile(JSMRGCN), backup_dir)
+    shutil.copy(inspect.getfile(JointConvolutional), backup_dir)
     shutil.copy(inspect.getfile(lib.ops.LSTM), backup_dir)
     shutil.copy(inspect.getfile(lib.graphprot_dataloader), backup_dir)
     shutil.copy(inspect.getfile(lib.rna_utils), backup_dir)
@@ -270,10 +270,7 @@ if __name__ == "__main__":
                                                fold_algo=FLAGS.fold_algo,
                                                probabilistic=FLAGS.probabilistic, w=FLAGS.folding_winsize,
                                                nucleotide_label=True, modify_leaks=False)[0]  # load one at a time
-
-    # First 400 positive examples, same for the CNN model and the GNN model
-    ig_ids = list(original_dataset['id'][:20])
-
+    ig_ids = list(dataset['id'][:20])
     np.save(os.path.join(output_dir, 'splits.npy'), dataset['splits'])
     manager = mp.Manager()
     q = manager.Queue()

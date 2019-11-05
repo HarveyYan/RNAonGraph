@@ -72,7 +72,7 @@ def conv1d(name, input_dim, output_dim, filter_size, inputs, stride=1, he_init=T
         return result
 
 
-def transposd_conv1d(name, input_dim, output_dim, filter_size, inputs, he_init=True, biases=True):
+def transposd_conv1d(name, input_dim, output_dim, filter_size, inputs, stride=2, he_init=True, biases=True):
     # From [batch, width, input_dim] to [batch, width*2, output_dim]
     with tf.variable_scope(name):
         # ignoring mask_type from original code
@@ -83,7 +83,6 @@ def transposd_conv1d(name, input_dim, output_dim, filter_size, inputs, he_init=T
                 maxval=stdev * np.sqrt(3)
             )
 
-        stride = 2
         fan_in = input_dim * filter_size / stride
         fan_out = output_dim * filter_size
 
@@ -99,7 +98,7 @@ def transposd_conv1d(name, input_dim, output_dim, filter_size, inputs, he_init=T
 
         # infer output shape
         input_shape = tf.shape(inputs)
-        output_shape = tf.stack([input_shape[0], 2*input_shape[1], output_dim])
+        output_shape = tf.stack([input_shape[0], stride * input_shape[1], output_dim])
 
         result = tf.contrib.nn.conv1d_transpose(
             value=inputs,
