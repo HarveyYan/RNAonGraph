@@ -146,7 +146,10 @@ def load_clip_seq(rbp_list=None, p=None, **kwargs):
 
                     for idx in indices:
                         try:
-                            seq[idx] = np.random.choice(['A', 'C', 'G', 'T'])
+                            if idx in [pos_idx[-1] - 1, pos_idx[-1], pos_idx[0]]:
+                                seq[idx] = np.random.choice(['A', 'C', 'G', 'T'])
+                            else:
+                                seq[idx] = np.random.choice(['a', 'c', 'g', 't'])
                         except IndexError:
                             pass
                     all_modified_seq.append(''.join(seq))
@@ -325,7 +328,9 @@ def test_overlapping(id_list_1, id_list_2):
 
 
 if __name__ == "__main__":
-    load_clip_seq(['CAPRIN1_Baltz2012'], use_embedding=False,
-                  fold_algo='rnaplfold',
-                  probabilistic=True, w=150,
-                  nucleotide_label=True, modify_leaks=True)[0]  # load one at a time
+    for rbp in all_rbps:
+        try:
+            dataset = load_clip_seq([rbp], use_embedding=False,
+                                    nucleotide_label=True, load_mat=False, modify_leaks=True)[0]  # load one at a time
+        except ValueError:
+            print('%s is skipped' % (rbp))

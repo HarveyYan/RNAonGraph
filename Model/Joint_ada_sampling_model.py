@@ -2,7 +2,6 @@
 import os
 import sys
 import time
-import math
 import numpy as np
 import tensorflow as tf
 import threading
@@ -28,7 +27,6 @@ class BackgroundGenerator(threading.Thread):
         self.size_train = y.shape[0]
         self.batch_size = batch_size
         self.iters_per_epoch = self.size_train // batch_size + (0 if self.size_train % batch_size == 0 else 1)
-        self.random_crop = kwargs.get('random_crop', False)
 
         self.queue = Queue(self.iters_per_epoch)
         self.daemon = True
@@ -38,14 +36,9 @@ class BackgroundGenerator(threading.Thread):
     def run(self):
         while True:
             permute = np.random.permutation(self.size_train)
-            node_tensor, all_rel_data, all_row_col, segment_length, raw_seq = JointConvolutional.indexing_iterable(
+            node_tensor, all_rel_data, all_row_col, segment_length, raw_seq = JointAdaModel.indexing_iterable(
                 self.X, permute)
             y = self.y[permute]
-            if self.random_crop:
-                # augmentation
-                node_tensor, all_rel_data, all_row_col, segment_length, y = \
-                    JointConvolutional.random_crop(node_tensor, all_rel_data, all_row_col, raw_seq, y,
-                                                   outer_truncation=False)
             for i in range(self.iters_per_epoch):
                 _node_tensor, _rel_data, _row_col, _segment, _labels \
                     = node_tensor[i * self.batch_size: (i + 1) * self.batch_size], \
@@ -55,9 +48,12 @@ class BackgroundGenerator(threading.Thread):
                       y[i * self.batch_size: (i + 1) * self.batch_size]
 
                 _max_len = max(_segment)
+                _mask_offset = np.array([_max_len - _seg for _seg in _segment])
+                _node_tensor = np.array(
+                    [np.pad(seq, [_max_len - len(seq), 0], mode='constant') for seq in _node_tensor])
                 _labels = np.array([np.pad(label, [_max_len - len(label), 0], mode='constant') for label in _labels])
-                all_adj_mat = JointConvolutional._merge_sparse_submatrices(_rel_data, _row_col, _segment)
-                self.queue.put([np.concatenate(_node_tensor, axis=0), _segment, _max_len, all_adj_mat, _labels])
+                all_adj_mat = JointAdaModel._merge_sparse_submatrices(_rel_data, _row_col, _segment)
+                self.queue.put([_node_tensor, _mask_offset, all_adj_mat, _labels])
                 if self.kill.is_set():
                     return
 
@@ -66,7 +62,7 @@ class BackgroundGenerator(threading.Thread):
         return next_item
 
 
-class JointConvolutional:
+class JointAdaModel:
 
     def __init__(self, node_dim, embedding_vec, gpu_device, **kwargs):
         self.node_dim = node_dim
@@ -86,6 +82,7 @@ class JointConvolutional:
         self.reuse_weights = kwargs.get('reuse_weights', False)
         self.lstm_ggnn = kwargs.get('lstm_ggnn', False)
         self.probabilistic = kwargs.get('probabilistic', True)
+        self.use_attention = kwargs.get('use_attention', False)
 
         self.mixing_ratio = kwargs.get('mixing_ratio', 0.)
         self.use_ghm = kwargs.get('use_ghm', False)
@@ -118,13 +115,12 @@ class JointConvolutional:
         self._init_session()
 
     def _placeholders(self):
-        self.node_input_ph = tf.placeholder(tf.int32, shape=[None, ])  # nb_nodes
-        self.adj_mat_ph = tf.sparse_placeholder(tf.float32, shape=[None, None])
-        # nb_nodes x nb_nodes
+        self.node_input_ph = tf.placeholder(tf.int32, shape=[None, None, ])  # batch_size x nb_nodes
+        self.adj_mat_ph = tf.sparse_placeholder(tf.float32, shape=[None, None, None])
+        # batch_size x nb_nodes x nb_nodes
 
-        self.labels = tf.placeholder(tf.int32, shape=[None, None, ])
-        self.max_len = tf.placeholder(tf.int32, shape=())
-        self.segment_length = tf.placeholder(tf.int32, shape=[None, ])  # always batch_size
+        self.labels = tf.placeholder(tf.int32, shape=[None, None, ])  # batch_size x nb_nodes
+        self.mask_offset = tf.placeholder(tf.int32, shape=[None, ])  # batch_size
 
         self.is_training_ph = tf.placeholder(tf.bool, ())
         self.global_step = tf.placeholder(tf.int32, ())
@@ -137,7 +133,6 @@ class JointConvolutional:
         else:
             print('using constant learning rate')
             self.lr_multiplier = 1.
-        # self.mixing_ratio_var = tf.placeholder_with_default(self.mixing_ratio, ())
 
     def _build_ggnn(self):
         embedding = tf.get_variable('embedding_layer', shape=(self.vocab_size, self.node_dim),
@@ -147,7 +142,7 @@ class JointConvolutional:
         if self.reuse_weights:
             if self.node_dim < self.units:
                 node_tensor = tf.pad(node_tensor,
-                                     [[0, 0], [0, self.units - self.node_dim]])
+                                     [[0, 0], [0, 0], [0, self.units - self.node_dim]])
             elif self.node_dim > self.units:
                 print('Changing \'self.units\' to %d!' % (self.node_dim))
                 self.units = self.node_dim
@@ -165,62 +160,49 @@ class JointConvolutional:
             else:
                 cell = tf.contrib.rnn.GRUCell(self.units)
 
+            adj_mat = tf.sparse.to_dense(self.adj_mat_ph, validate_indices=False)
+
             for i in range(self.layers):
                 name = 'joint_convolutional' if self.reuse_weights else 'joint_convolutional_%d' % (i + 1)
                 # variables for sparse implementation default placement to gpu
-                msg_tensor = joint_layer(name, (self.adj_mat_ph, hidden_tensor, node_tensor),
-                                         self.units, reuse=self.reuse_weights)
+                msg_tensor = joint_layer(name, (adj_mat, hidden_tensor, node_tensor),
+                                         self.units, reuse=self.reuse_weights, batch_axis=True,
+                                         use_attention=self.use_attention)
                 msg_tensor = normalize('Norm' if self.reuse_weights else 'Norm%d' % (i + 1),
                                        msg_tensor, self.use_bn, self.is_training_ph)
                 msg_tensor = tf.nn.leaky_relu(msg_tensor)
                 msg_tensor = tf.layers.dropout(msg_tensor, self.dropout_rate, training=self.is_training_ph)
+
+                # reshaping msg_tensor to two dimensions
+                original_shape = tf.shape(msg_tensor)  # batch_size, nb_nodes, units
+                msg_tensor = tf.reshape(msg_tensor, (-1, self.units))
 
                 if hidden_tensor is None:  # hidden_state
                     state = node_tensor
                 else:
                     state = hidden_tensor
 
+                state = tf.reshape(state, (-1, self.units))
+
                 if self.lstm_ggnn:
                     if i == 0:
                         memory = tf.zeros(tf.shape(state), tf.float32)
+                    # state becomes the hidden tensor
                     hidden_tensor, (memory, _) = cell(msg_tensor, tf.nn.rnn_cell.LSTMStateTuple(memory, state))
                 else:
                     hidden_tensor, _ = cell(msg_tensor, state)
                 # [batch_size, length, u]
+                hidden_tensor = tf.reshape(hidden_tensor, original_shape)
+                hidden_tensor *= (1. - tf.sequence_mask(self.mask_offset, maxlen=original_shape[1], dtype=tf.float32))[
+                                 :, :, None]
         # the original nucleotide embeddings learnt by GNN
-        self.hidden_tensor = hidden_tensor
-        # [nb_nodes, units] no dummies
         output = hidden_tensor
-
-        # while loop to recover batch size
-        batch_output = tf.TensorArray(tf.float32, size=tf.shape(self.segment_length)[0], infer_shape=True,
-                                      dynamic_size=True)
-        mask_offset = tf.TensorArray(tf.int32, size=tf.shape(self.segment_length)[0], infer_shape=True,
-                                     dynamic_size=True)
-        i = tf.constant(0)
-        start_idx = tf.constant(0)
-        while_condition = lambda i, _1, _2, _3: tf.less(i, tf.shape(self.segment_length)[0])
-
-        def body(i, start_idx, batch_output, mask_offset):
-            end_idx = start_idx + self.segment_length[i]
-            segment = output[start_idx:end_idx]
-            # pad segment to max len
-            segment = tf.pad(segment, [[self.max_len - self.segment_length[i], 0], [0, 0]])
-            batch_output = batch_output.write(i, segment)
-            mask_offset = mask_offset.write(i, self.max_len - self.segment_length[i])
-            return [tf.add(i, 1), end_idx, batch_output, mask_offset]
-
-        _, _, batch_output, mask_offset = tf.while_loop(while_condition, body,
-                                                        [i, start_idx, batch_output, mask_offset])
-        output = batch_output.stack()
-        mask_offset = mask_offset.stack()
-        self.mask_offset = mask_offset
         self.gnn_embedding = output
 
         # we have dummies padded to the front
         with tf.variable_scope('set2set_pooling'):
             output = lib.ops.LSTM.set2set_pooling('set2set_pooling', output, self.pool_steps, self.dropout_rate,
-                                                  self.is_training_ph, True, mask_offset,
+                                                  self.is_training_ph, True, self.mask_offset,
                                                   variables_on_cpu=False)
 
         self.bilstm_embedding = tf.get_collection('nuc_emb')[0]
@@ -244,7 +226,7 @@ class JointConvolutional:
             ))
         # nucleotide level loss
         # dummies are padded to the front...
-        self.mask = 1.0 - tf.sequence_mask(self.mask_offset, maxlen=self.max_len, dtype=tf.float32)
+        self.mask = 1.0 - tf.sequence_mask(self.mask_offset, maxlen=tf.shape(self.labels)[1], dtype=tf.float32)
         if self.use_ghm:
             self.gnn_cost = tf.reduce_sum(
                 get_ghm_weights(self.gnn_prediction, self.labels, self.mask,
@@ -252,7 +234,7 @@ class JointConvolutional:
                 tf.nn.softmax_cross_entropy_with_logits(
                     logits=self.gnn_output,
                     labels=tf.one_hot(self.labels, depth=2),
-                ) / tf.cast(tf.reduce_sum(self.segment_length), tf.float32)
+                ) / tf.cast(tf.reduce_sum(self.mask), tf.float32)
             )
             self.bilstm_cost = tf.reduce_sum(
                 get_ghm_weights(self.bilstm_prediction, self.labels, self.mask,
@@ -260,7 +242,7 @@ class JointConvolutional:
                 tf.nn.softmax_cross_entropy_with_logits(
                     logits=self.bilstm_output,
                     labels=tf.one_hot(self.labels, depth=2),
-                ) / tf.cast(tf.reduce_sum(self.segment_length), tf.float32)
+                ) / tf.cast(tf.reduce_sum(self.mask), tf.float32)
             )
         else:
             self.gnn_cost = tf.reduce_sum(
@@ -268,13 +250,13 @@ class JointConvolutional:
                 tf.nn.softmax_cross_entropy_with_logits(
                     logits=self.gnn_output,
                     labels=tf.one_hot(self.labels, depth=2),
-                )) / tf.cast(tf.reduce_sum(self.segment_length), tf.float32)
+                )) / tf.cast(tf.reduce_sum(self.mask), tf.float32)
             self.bilstm_cost = tf.reduce_sum(
                 self.mask * \
                 tf.nn.softmax_cross_entropy_with_logits(
                     logits=self.bilstm_output,
                     labels=tf.one_hot(self.labels, depth=2),
-                )) / tf.cast(tf.reduce_sum(self.segment_length), tf.float32)
+                )) / tf.cast(tf.reduce_sum(self.mask), tf.float32)
 
         self.cost = self.mixing_ratio * self.graph_cost + (1. - self.mixing_ratio) * self.bilstm_cost
 
@@ -335,85 +317,29 @@ class JointConvolutional:
     @classmethod
     def _merge_sparse_submatrices(cls, data, row_col, segments):
         '''
-        merge sparse submatrices
+        merge sparse submatrices to 3 dimensional sparse tensor
+        take note that padding has to be made in the beginning of each submatrix
         '''
 
         all_data, all_row_col = [], []
-        size = 0
-        for _data, _row_col, _segment in zip(data, row_col, segments):
+        max_size = np.max(segments)
+        for i, (_data, _row_col, _segment) in enumerate(zip(data, row_col, segments)):
             all_data.append(_data[2])
             all_data.append(_data[3])
-            all_row_col.append(np.array(_row_col[2]) + size)
-            all_row_col.append(np.array(_row_col[3]) + size)
-            size += _segment
+            all_row_col.append(np.concatenate([(np.ones((len(_row_col[2]), 1)) * i).astype(np.int32),
+                                               (np.array(_row_col[2]) + max_size - _segment).reshape(-1, 2)], axis=-1))
+            all_row_col.append(np.concatenate([(np.ones((len(_row_col[3]), 1)) * i).astype(np.int32),
+                                               (np.array(_row_col[3]) + max_size - _segment).reshape(-1, 2)], axis=-1))
 
         return tf.compat.v1.SparseTensorValue(
             np.concatenate(all_row_col),
             np.concatenate(all_data),
-            (size, size)
+            (len(segments), max_size, max_size)
         )
 
     @classmethod
     def indexing_iterable(cls, iterable, idx):
         return [item[idx] for item in iterable]
-
-    @classmethod
-    def random_crop(cls, node_tensor, all_rel_data, all_row_col, raw_seq, y,
-                    pos_read_retention_rate=0.5, outer_truncation=True):
-        m_seq, m_label, m_sg, m_data, m_row_col = [], [], [], [], []
-        for seq, data, row_col, _raw_seq, label in zip(node_tensor, all_rel_data, all_row_col, raw_seq, y):
-            if np.max(label) == 0:
-                # negative sequence
-                pseudo_label = (np.array(list(_raw_seq)) <= 'Z').astype(np.int32)
-                pos_idx = np.where(pseudo_label == 1)[0]
-            else:
-                pos_idx = np.where(label == 1)[0]
-                # keep more than 3/4 of the sequence (length), and random start
-                read_length = len(pos_idx)
-                rate = min(max(pos_read_retention_rate, np.random.rand()), 0.9)
-                winsize = int(rate * read_length)
-                surplus = read_length - winsize + 1
-                start_idx = np.random.choice(range(int(surplus / 4), math.ceil(surplus * 3 / 4)))
-                label = [0] * (pos_idx[0] + start_idx) + [1] * winsize + [0] * \
-                        (len(seq) - winsize - start_idx - pos_idx[0])
-
-            if outer_truncation:
-                # left_truncate = int(np.random.rand() * pos_idx[0])
-                # right_truncate = int(np.random.rand() * (len(seq) - pos_idx[-1] - 1))
-                rate = max(0.2, min(np.random.rand(), 0.9))  # don't truncate too much
-                if np.random.rand() < 0.5:
-                    left_truncate = int(rate * pos_idx[0])
-                    right_truncate = 0
-                else:
-                    left_truncate = 0
-                    right_truncate = int(rate * (len(seq) - pos_idx[-1] - 1))
-
-                if not right_truncate > 0:
-                    right_truncate = -len(seq)
-
-                data_rel_list, row_col_rel_list = [], []
-                for data_rel, row_col_rel in zip(data, row_col):
-                    # f_covalent, b_covalent, f_hydro, b_hydro
-                    indices = (row_col_rel >= left_truncate).all(axis=-1) & \
-                              (row_col_rel <= len(seq) - right_truncate - 1).all(axis=-1)
-                    data_rel_list.append(data_rel[indices])
-                    row_col_rel_list.append(row_col_rel[indices] - left_truncate)
-                m_data.append(data_rel_list)
-                m_row_col.append(row_col_rel_list)
-
-                seq = seq[left_truncate: -right_truncate]
-                label = label[left_truncate: -right_truncate]
-                m_seq.append(seq)
-                m_sg.append(len(seq))
-                m_label.append(label)
-            else:
-                m_data.append(data)
-                m_row_col.append(row_col)
-                m_seq.append(seq)
-                m_sg.append(len(seq))
-                m_label.append(label)
-
-        return np.array(m_seq), np.array(m_data), np.array(m_row_col), np.array(m_sg), np.array(m_label)
 
     def fit(self, X, y, epochs, batch_size, output_dir, logging=False, epoch_to_start=0):
         checkpoints_dir = os.path.join(output_dir, 'checkpoints/')
@@ -453,17 +379,15 @@ class JointConvolutional:
             training_time = 0.
             for i in range(iters_per_epoch):
                 prepro_start = time.time()
-                _node_tensor, _segment, _max_len, all_adj_mat, _labels = train_generator.next()
+                _node_tensor, _mask_offset, all_adj_mat, _labels = train_generator.next()
                 feed_dict = {
                     self.node_input_ph: _node_tensor,
                     self.adj_mat_ph: all_adj_mat,
                     self.labels: _labels,
-                    self.max_len: _max_len,
-                    self.segment_length: _segment,
+                    self.mask_offset: _mask_offset,
                     self.global_step: i + epoch * iters_per_epoch,
                     self.hf_iters_per_epoch: iters_per_epoch // 2,
                     self.is_training_ph: True,
-                    # self.mixing_ratio_var: self.mixing_ratio if epoch < max(100, epochs // 2) else 0.2
                 }
                 prepro_end = time.time()
                 prepro_time += (prepro_end - prepro_start)
@@ -524,14 +448,13 @@ class JointConvolutional:
     def evaluate_with_generator(self, generator):
         all_cost, all_graph_cost, all_gnn_nuc_cost, all_bilstm_nuc_cost = 0., 0., 0., 0.
         for i in range(generator.iters_per_epoch):
-            _node_tensor, _segment, _max_len, all_adj_mat, _labels = generator.next()
+            _node_tensor, _mask_offset, all_adj_mat, _labels = generator.next()
 
             feed_dict = {
                 self.node_input_ph: _node_tensor,
                 self.adj_mat_ph: all_adj_mat,
                 self.labels: _labels,
-                self.max_len: _max_len,
-                self.segment_length: _segment,
+                self.mask_offset: _mask_offset,
                 self.is_training_ph: False
             }
             cost, graph_cost, gnn_nuc_cost, bilstm_nuc_cost, _, _ = self.sess.run(
@@ -546,18 +469,10 @@ class JointConvolutional:
         return (all_cost / generator.size_train, all_graph_cost / generator.size_train,
                 all_gnn_nuc_cost / generator.size_train, all_bilstm_nuc_cost / generator.size_train), acc, auc
 
-    def evaluate(self, X, y, batch_size, random_crop=False, allow_batch=True):
+    def evaluate(self, X, y, batch_size):
         node_tensor, all_rel_data, all_row_col, segment_length, raw_seq = X
-        if random_crop:
-            # augmentation
-            node_tensor, all_rel_data, all_row_col, segment_length, y = \
-                self.random_crop(node_tensor, all_rel_data, all_row_col, raw_seq, y, outer_truncation=False)
         all_cost, all_graph_cost, all_gnn_nuc_cost, all_bilstm_nuc_cost = 0., 0., 0., 0.
-        if allow_batch:
-            iters_per_epoch = len(node_tensor) // batch_size + (0 if len(node_tensor) % batch_size == 0 else 1)
-        else:
-            iters_per_epoch = len(node_tensor)
-            batch_size = 1
+        iters_per_epoch = len(node_tensor) // batch_size + (0 if len(node_tensor) % batch_size == 0 else 1)
         for i in range(iters_per_epoch):
             _node_tensor, _rel_data, _row_col, _segment, _labels \
                 = node_tensor[i * batch_size: (i + 1) * batch_size], \
@@ -567,15 +482,16 @@ class JointConvolutional:
                   y[i * batch_size: (i + 1) * batch_size]
 
             _max_len = max(_segment)
+            _mask_offset = np.array([_max_len - _seg for _seg in _segment])
+            _node_tensor = np.array([np.pad(seq, [_max_len - len(seq), 0], mode='constant') for seq in _node_tensor])
             _labels = np.array([np.pad(label, [_max_len - len(label), 0], mode='constant') for label in _labels])
             all_adj_mat = self._merge_sparse_submatrices(_rel_data, _row_col, _segment)
 
             feed_dict = {
-                self.node_input_ph: np.concatenate(_node_tensor, axis=0),
+                self.node_input_ph: _node_tensor,
                 self.adj_mat_ph: all_adj_mat,
                 self.labels: _labels,
-                self.max_len: _max_len,
-                self.segment_length: _segment,
+                self.mask_offset: _mask_offset,
                 self.is_training_ph: False
             }
             cost, graph_cost, gnn_nuc_cost, bilstm_nuc_cost, _, _ = self.sess.run(
@@ -599,16 +515,17 @@ class JointConvolutional:
                 = node_tensor[i * batch_size: (i + 1) * batch_size], \
                   all_rel_data[i * batch_size: (i + 1) * batch_size], \
                   all_row_col[i * batch_size: (i + 1) * batch_size], \
-                  segment_length[i * batch_size: (i + 1) * batch_size],
+                  segment_length[i * batch_size: (i + 1) * batch_size]
 
             _max_len = max(_segment)
+            _mask_offset = np.array([_max_len - _seg for _seg in _segment])
+            _node_tensor = np.array([np.pad(seq, [_max_len - len(seq), 0], mode='constant') for seq in _node_tensor])
             all_adj_mat = self._merge_sparse_submatrices(_rel_data, _row_col, _segment)
 
             feed_dict = {
-                self.node_input_ph: np.concatenate(_node_tensor, axis=0),
+                self.node_input_ph: _node_tensor,
                 self.adj_mat_ph: all_adj_mat,
-                self.max_len: _max_len,
-                self.segment_length: _segment,
+                self.mask_offset: _mask_offset,
                 self.is_training_ph: False
             }
             preds.append(self.sess.run(self.prediction, feed_dict))
@@ -633,10 +550,9 @@ class JointConvolutional:
                                                          [_segment] * (interp_steps + 1))
 
             feed_dict = {
-                self.node_tensor: np.concatenate(np.array(new_node_tensor), axis=0),
+                self.node_tensor: np.array(new_node_tensor),
                 self.adj_mat_ph: all_adj_mat,
-                self.max_len: _segment,
-                self.segment_length: [_segment] * (interp_steps + 1),
+                self.mask_offset: np.zeros((interp_steps + 1,), np.int32),
                 self.is_training_ph: False
             }
 
@@ -665,3 +581,12 @@ class JointConvolutional:
 
     def load(self, chkp_path):
         self.saver.restore(self.sess, chkp_path)
+
+
+if __name__ == "__main__":
+    data = [[None, None, [1, 2], [3]], [None, None, [4, 5], []], [None, None, [6], []]]
+    row_col = [[None, None, [[0, 0], [1, 1]], [[2, 2]]], [None, None, [[0, 0], [5, 5]], []], [None, None, [[6, 6]], []]]
+    segments = [3, 6, 7]
+    sess = tf.Session()
+    sp_ph = tf.sparse_placeholder(tf.float32, shape=[None, None, None])
+    print(sess.run(sp_ph, {sp_ph: JointAdaModel._merge_sparse_submatrices(data, row_col, segments)}))

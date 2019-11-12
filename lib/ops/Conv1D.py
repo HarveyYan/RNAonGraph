@@ -2,7 +2,7 @@ import tensorflow as tf
 import numpy as np
 
 
-def conv1d(name, input_dim, output_dim, filter_size, inputs, stride=1, he_init=True, biases=True, dilation=1, pad_mode='SAME', variables_on_cpu=True):
+def conv1d(name, input_dim, output_dim, filter_size, inputs, stride=1, he_init=True, biases=True, dilation=1, pad_mode='SAME', pad_val='CONSTANT', variables_on_cpu=True):
     with tf.variable_scope(name):
         # ignoring mask_type from original code
 
@@ -45,13 +45,16 @@ def conv1d(name, input_dim, output_dim, filter_size, inputs, stride=1, he_init=T
                     1 1 1 1
         output_length = (length - F + P) // stride + 1
         '''
-        if pad_mode == 'SAME':
+        if pad_mode == 'SAME' or pad_mode == 'SAME_EVEN':
             length = tf.shape(inputs)[1]
             output_length = (length + stride - 1) // stride
             num_paddings = (output_length - 1)*stride + filter_size - length
-            left_paddings = num_paddings
-            right_paddings = 0
-            inputs = tf.pad(inputs, [[0, 0], [left_paddings, right_paddings], [0, 0]], mode="CONSTANT")
+            if pad_mode == 'SAME_EVEN':
+                left_paddings = num_paddings // 2
+            else:
+                left_paddings = num_paddings
+            right_paddings = num_paddings - left_paddings
+            inputs = tf.pad(inputs, [[0, 0], [left_paddings, right_paddings], [0, 0]], mode=pad_val)
 
         result = tf.nn.conv1d(
             value=inputs,

@@ -47,10 +47,6 @@ class JMRT:
                     0.9, use_nesterov=True
                 )
             else:
-                # self.optimizer = tf.contrib.opt.AdamWOptimizer(
-                #     1e-4,
-                #     learning_rate=self.learning_rate * self.lr_multiplier,
-                # )
                 self.optimizer = AMSGrad(
                     self.learning_rate * self.lr_multiplier,
                     beta2=0.999
@@ -119,6 +115,8 @@ class JMRT:
         self.mask_offset = mask_offset
 
         with tf.variable_scope('seq_scan'):
+            # paddings will influence the prediction results, even unavoidable if batch norm is used
+            # but the influence will be very small, enough to ignore it
             output = lib.ops.Conv1D.conv1d('conv1', self.node_dim, self.units, 10, output, biases=False,
                                            pad_mode='SAME', variables_on_cpu=False)
             output = normalize('bn1', output, self.use_bn, self.is_training_ph)

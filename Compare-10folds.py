@@ -4,10 +4,10 @@ import pandas as pd
 from lib.logger import CSVLogger
 import argparse
 
+
 def summarize_10fold_results(path, outfile_name):
     logger = CSVLogger(outfile_name, path,
-                       ['RBP', 'acc', 'acc_std', 'pos_acc', 'pos_acc_std',
-                        'nuc_acc', 'nuc_acc_std', 'auc', 'auc_std'])
+                       ['RBP', 'auc', 'auc_std', 'original_auc', 'original_auc_std'])
     all_dicts = []
     for rbp_dir in os.listdir(path):
         if os.path.isdir(os.path.join(path, rbp_dir)):
@@ -18,20 +18,15 @@ def summarize_10fold_results(path, outfile_name):
                 except pd.errors.EmptyDataError:
                     print(rbp_name, 'has no results')
                     continue
-                acc, auc = list(file['seq_acc']), list(file['auc'])
-                bilstm_pos_acc, bilstm_nuc_acc = list(file['bilstm_pos_acc']), list(file['bilstm_nuc_acc'])
-                if len(acc) < 10:
-                    print(rbp_name, 'lacks %d folds'%(10-len(acc)))
+                auc, original_auc = list(file['auc']), list(file['original_auc'])
+                if len(auc) < 10:
+                    print(rbp_name, 'lacks %d folds' % (10 - len(auc)))
                 all_dicts.append({
                     'RBP': rbp_name,
-                    'acc': np.round(np.mean(acc), 3),
-                    'acc_std': np.round(np.std(acc), 3),
-                    'pos_acc': np.round(np.mean(bilstm_pos_acc), 3),
-                    'pos_acc_std': np.round(np.std(bilstm_pos_acc), 3),
-                    'nuc_acc': np.round(np.mean(bilstm_nuc_acc), 3),
-                    'nuc_acc_std': np.round(np.std(bilstm_nuc_acc), 3),
                     'auc': np.round(np.mean(auc), 3),
-                    'auc_std': np.round(np.std(auc), 3)
+                    'auc_std': np.round(np.std(auc), 3),
+                    'original_auc': np.round(np.mean(original_auc), 3),
+                    'original_auc_std': np.round(np.std(original_auc), 3)
                 })
             else:
                 print(rbp_name, 'has no results')
@@ -39,10 +34,9 @@ def summarize_10fold_results(path, outfile_name):
     logger.update_with_dicts(all_dicts)
     logger.close()
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--path", default=None, type=str, help="")
     args = parser.parse_args()
     summarize_10fold_results(args.path, 'rnaplfold-results.csv')
-
-

@@ -125,6 +125,10 @@ def att_gcl(name, inputs, units, reuse=True, expr_simplified_att=False):
 
 
 def sparse_graph_convolution_layers(name, inputs, units, reuse=True):
+    """
+    This one is used by the Joint_SMRGCN model;
+    A crude prototypical operation
+    """
     with tf.variable_scope(name, reuse=tf.AUTO_REUSE if reuse else False):
         # adj_tensor: list (size nb_bonds) of [length, length] matrices
         adj_tensor, hidden_tensor, node_tensor = inputs
@@ -170,7 +174,22 @@ def sparse_att_gcl(name, inputs, units, reuse=True):
         return output  # messages
 
 
-def joint_layer(name, inputs, units, reuse=True):
+def sparse_dense_matmult_batch(sp_a, b):
+
+    def map_function(x):
+        i, dense_slice = x[0], x[1]
+        sparse_slice = tf.sparse.reshape(tf.sparse.slice(
+            sp_a, [i, 0, 0], [1, sp_a.dense_shape[1], sp_a.dense_shape[2]]),
+            [sp_a.dense_shape[1], sp_a.dense_shape[2]])
+        mult_slice = tf.sparse.sparse_dense_matmul(sparse_slice, dense_slice)
+        return mult_slice
+
+    elems = (tf.range(0, sp_a.dense_shape[0], delta=1, dtype=tf.int64), b)
+    return tf.map_fn(map_function, elems, dtype=tf.float32, back_prop=True)
+
+
+def joint_layer(name, inputs, units, reuse=True, batch_axis=False,
+                use_attention=False):
     '''
     1. undirectional
     2. convalent adjacency matrix is unrolled 10 times
@@ -184,10 +203,27 @@ def joint_layer(name, inputs, units, reuse=True):
         output = []
         msg_bond = linear('hydro_bond', input_dim, units,
                           annotations, biases=False, variables_on_cpu=False)
-        output.append(tf.sparse_tensor_dense_matmul(adj_tensor, msg_bond))
-
-        output.append(conv1d('conv1', input_dim, units, 10, annotations[None, :, :], biases=False,
-                             pad_mode='SAME', variables_on_cpu=False)[0, :, :])
+        if batch_axis:
+            # tensorflow doesn't have a very well support for higher ranks (>=3) sparse tensor multiplication
+            # therefore, if we have a batch axis, we'd better use the vanilla matmul for dense matrices
+            if use_attention:
+                bias_mat = (1. - tf.cast(adj_tensor > 0, tf.float32)) * -10000. + adj_tensor
+                f_1 = tf.layers.conv1d(annotations, 1, 1, name='att_linear_left', use_bias=False)
+                f_2 = tf.layers.conv1d(annotations, 1, 1, name='att_linear_right', use_bias=False)
+                logits = f_1 + tf.transpose(f_2, [0, 2, 1])
+                coefs = tf.nn.softmax(tf.nn.leaky_relu(logits) * bias_mat)
+                bp_msg = tf.matmul(coefs, msg_bond)
+            else:
+                bp_msg = tf.matmul(adj_tensor, msg_bond)
+            output.append(bp_msg)
+            output.append(conv1d('conv1', input_dim, units, 10, annotations, biases=False,
+                                 pad_mode='SAME_EVEN', pad_val='CONSTANT', variables_on_cpu=False))
+        else:
+            # boundary nucleotides from other sequences are used as padding, does not seem to matter too much
+            # padding are all placed on the left
+            output.append(tf.sparse_tensor_dense_matmul(adj_tensor, msg_bond))
+            output.append(conv1d('conv1', input_dim, units, 10, annotations[None, :, :], biases=False,
+                                 pad_mode='SAME', pad_val='CONSTANT', variables_on_cpu=False)[0, :, :])
 
         output = tf.add_n(output) / 2
         # self-connection \approx residual connection

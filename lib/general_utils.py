@@ -95,47 +95,7 @@ def wilcoxon_test(path_to_csv_1, path_to_csv_2, roundto=3, entry_name='auc'):
 
 
 if __name__ == "__main__":
-    # compare_two_csvs(
-    #     '../output/Joint-MRT-GraphProt/MRT-results.csv',
-    #     '../output/Joint-SMRGCN-GraphProt/JSMRGCN-results.csv',
-    #     'CNN-Joint vs GNN-Joint', 'CNN-Joint', 'GNN-Joint')
-
-    # compare_two_csvs(
-    #     '../output/RNATracker-GraphProt/RT-results.csv',
-    #     '../output/Joint-MRT-GraphProt/MRT-results.csv',
-    #     'CNN vs CNN-Joint', 'CNN', 'CNN-Joint')
-
-    # compare_two_csvs(
-    #     '../output/mdbn-results.csv',
-    #     '../output/Joint-SMRGCN-GraphProt/JSMRGCN-results.csv',
-    #     'mDBN vs GNN-Joint', 'mDBN', 'GNN-Joint')
-
-    # compare_two_csvs(
-    #     '../output/ideepv.csv',
-    #     '../output/Joint-SMRGCN-GraphProt/JSMRGCN-results.csv',
-    #     'ideepv vs GNN-Joint', 'ideepv', 'GNN-Joint')
-
-    # compare_two_csvs(
-    #     '../output/Joint-MRT-GraphProt/MRT-results.csv',
-    #     '../output/Joint-SMRGCN-GraphProt/JSMRGCN-results.csv',
-    #     '(Alignment ACC) CNN-Joint vs GNN-Joint', 'CNN-Joint', 'GNN-Joint', entry_name='pos_acc')
-
-    print('CNN vs CNN-Joint\n',
-          wilcoxon_test('../output/RNATracker-GraphProt/RT-results.csv',
-                        '../output/Joint-MRT-GraphProt/MRT-results.csv'))
-
-    print('CNN-Joint vs GNN-Joint\n',
-          wilcoxon_test('../output/Joint-MRT-GraphProt/MRT-results.csv',
-                        '../output/Joint-SMRGCN-GraphProt/JSMRGCN-results.csv'))
-
-    print('(ACC Alignment) CNN-Joint vs GNN-Joint\n',
-          wilcoxon_test('../output/Joint-MRT-GraphProt/MRT-results.csv',
-                        '../output/Joint-SMRGCN-GraphProt/JSMRGCN-results.csv', entry_name='pos_acc'))
-
-    print('mDBN vs GNN-Joint\n',
-          wilcoxon_test('../output/mdbn-results.csv',
-                        '../output/Joint-SMRGCN-GraphProt/JSMRGCN-results.csv'))
-
-    print('ideepv vs GNN-Joint\n',
-          wilcoxon_test('../output/ideepv.csv',
-                        '../output/Joint-SMRGCN-GraphProt/JSMRGCN-results.csv'))
+    compare_two_csvs(
+        '../output/Joint-MRT-GraphProt-debiased/MRT-results.csv',
+        '../output/Joint-convolutional-debiased/GNN-results.csv',
+        'CNN-Joint vs GNN-Joint', 'CNN-Joint', 'GNN-Joint')
