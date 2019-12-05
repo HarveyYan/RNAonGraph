@@ -2,6 +2,22 @@ import numpy as np
 import os
 import matplotlib
 import matplotlib.pyplot as plt
+import forgi
+from forgi.visual.mplotlib import _find_annot_pos_on_circle
+import colorsys
+import RNA
+import matplotlib.colors as mc
+import shutil
+import subprocess as sp
+
+
+weblogo_opts = '-X NO --fineprint "" --resolution "350" --format "PNG"'
+weblogo_opts += ' -C "#CB2026" A A'
+weblogo_opts += ' -C "#34459C" C C'
+weblogo_opts += ' -C "#FBB116" G G'
+weblogo_opts += ' -C "#0C8040" T T'
+weblogo_opts += ' -C "#0C8040" U U'
+
 
 plt.style.use('classic')
 matplotlib.rcParams.update({'figure.figsize': [10.0, 10.0], 'font.family': 'Times New Roman', 'figure.dpi': 350})
@@ -241,3 +257,117 @@ def plot_weights(array,
     else:
         plt.savefig(save_path, dpi=350)
     plt.close(fig)
+
+
+def plot_rna_struct(seq, struct, ax=None, offset=(0, 0), text_kwargs={}, backbone_kwargs={},
+             basepair_kwargs={}, highlight_bp_idx=[], highlight_nt_idx=[], lighten=0.7, saveto='tmp.png'):
+
+    with open('tmp.fa', 'w') as file:
+        file.write('>tmp\n%s\n%s' % (seq, struct))
+    cg = forgi.load_rna('tmp.fa', allow_many=False)
+
+    RNA.cvar.rna_plot_type = 1
+
+    fig = plt.figure(figsize=(30, 30))
+    coords = []
+
+    bp_string = cg.to_dotbracket_string()
+
+    if ax is None:
+        ax = plt.gca()
+
+    if offset is None:
+        offset = (0, 0)
+    elif offset is True:
+        offset = (ax.get_xlim()[1], ax.get_ylim()[1])
+    else:
+        pass
+
+    vrna_coords = RNA.get_xy_coordinates(bp_string)
+    # TODO Add option to rotate the plot
+    for i, _ in enumerate(bp_string):
+        coord = (offset[0] + vrna_coords.get(i).X,
+                 offset[1] + vrna_coords.get(i).Y)
+        coords.append(coord)
+    coords = np.array(coords)
+    # First plot backbone
+    bkwargs = {"color": "grey", "zorder": 0, "linewidth": 0.5}
+    bkwargs.update(backbone_kwargs)
+    ax.plot(coords[:, 0], coords[:, 1], **bkwargs)
+    # Now plot basepairs
+    basepairs_hl, basepairs_nonhl = [], []
+    for s in cg.stem_iterator():
+        for p1, p2 in cg.stem_bp_iterator(s):
+            if (p1 - 1, p2 - 1) in highlight_bp_idx:
+                basepairs_hl.append([coords[p1 - 1], coords[p2 - 1]])
+            else:
+                basepairs_nonhl.append([coords[p1 - 1], coords[p2 - 1]])
+
+    if len(basepairs_hl) > 0:
+        basepairs_hl = np.array(basepairs_hl)
+        bpkwargs_hl = {"color": 'red', "zorder": 0, "linewidth": 3}
+        bpkwargs_hl.update(basepair_kwargs)
+        ax.plot(basepairs_hl[:, :, 0].T, basepairs_hl[:, :, 1].T, **bpkwargs_hl)
+
+    if len(basepairs_nonhl) > 0:
+        basepairs_nonhl = np.array(basepairs_nonhl)
+        bpkwargs_nonhl = {"color": 'black', "zorder": 0, "linewidth": 0.5}
+        bpkwargs_nonhl.update(basepair_kwargs)
+        ax.plot(basepairs_nonhl[:, :, 0].T, basepairs_nonhl[:, :, 1].T, **bpkwargs_nonhl)
+
+    # Now plot circles
+    for i, coord in enumerate(coords):
+
+        if i in highlight_nt_idx:
+            c = 'green'
+            h, l, s = colorsys.rgb_to_hls(*mc.to_rgb(c))
+            if lighten > 0:
+                l += (1 - l) * min(1, lighten)
+            else:
+                l += l * max(-1, lighten)
+            c = colorsys.hls_to_rgb(h, l, s)
+            circle = plt.Circle((coord[0], coord[1]),
+                                edgecolor="black", facecolor=c)
+        else:
+            circle = plt.Circle((coord[0], coord[1]),
+                                edgecolor="black", facecolor="white")
+
+        ax.add_artist(circle)
+        if cg.seq:
+            if "fontweight" not in text_kwargs:
+                text_kwargs["fontweight"] = "bold"
+            ax.annotate(cg.seq[i + 1], xy=coord, ha="center", va="center", **text_kwargs)
+
+    all_coords = list(coords)
+    ntnum_kwargs = {"color": "gray"}
+    ntnum_kwargs.update(text_kwargs)
+    for nt in range(10, cg.seq_length, 10):
+        # We try different angles
+        annot_pos = _find_annot_pos_on_circle(nt, all_coords, cg)
+        if annot_pos is not None:
+            ax.annotate(str(nt), xy=coords[nt - 1], xytext=annot_pos,
+                        arrowprops={"width": 1, "headwidth": 1, "color": "gray"},
+                        ha="center", va="center", zorder=0, **ntnum_kwargs)
+            all_coords.append(annot_pos)
+
+    datalim = ((min(list(coords[:, 0]) + [ax.get_xlim()[0]]),
+                min(list(coords[:, 1]) + [ax.get_ylim()[0]])),
+               (max(list(coords[:, 0]) + [ax.get_xlim()[1]]),
+                max(list(coords[:, 1]) + [ax.get_ylim()[1]])))
+
+    ax.set_aspect('equal', 'datalim')
+    ax.update_datalim(datalim)
+    ax.autoscale_view()
+    ax.set_axis_off()
+
+    plt.savefig(saveto, dpi=350)
+    plt.close(fig)
+
+def plot_weblogo(msa_file_path, save_path):
+    if shutil.which("weblogo") is None:
+        print('weblogo command is not available!')
+        return
+
+    weblogo_cmd = 'weblogo %s < %s > %s' % (
+        weblogo_opts, msa_file_path, save_path)
+    sp.call(weblogo_cmd, shell=True)

@@ -107,9 +107,10 @@ def Logger(q):
                 free_devices = list((c1 - c2).elements())
                 # free_devices = list(set(DEVICES).difference(set(all_registered_devices)))
                 if len(free_devices) > 0:
-                    print('free device', free_devices[0])
-                    q.put('master_%d_' % (process_id) + free_devices[0])
-                    registered_gpus[process_id] = free_devices[0]
+                    _device = np.random.choice(free_devices)
+                    print('free device', _device)
+                    q.put('master_%d_' % (process_id) + _device)
+                    registered_gpus[process_id] = _device
                 else:
                     print('no free device!')
                     print(registered_gpus)
@@ -235,7 +236,6 @@ def run_one_rbp(fold_idx, q):
 
 
 if __name__ == "__main__":
-
     cur_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     if FLAGS.output_dir == '':
@@ -256,26 +256,32 @@ if __name__ == "__main__":
     shutil.copy(inspect.getfile(lib.graphprot_dataloader), backup_dir)
     shutil.copy(inspect.getfile(lib.rna_utils), backup_dir)
 
-    # This one corrects the nucleotide bias at the beginning or at the end of a viewpoint region
-    dataset = \
-        lib.graphprot_dataloader.load_clip_seq([TRAIN_RBP_ID], use_embedding=FLAGS.use_embedding,
-                                               fold_algo=FLAGS.fold_algo,
-                                               probabilistic=FLAGS.probabilistic, w=FLAGS.folding_winsize,
-                                               nucleotide_label=True, modify_leaks=True)[0]
-
     # This one is the original dataset, with the bias
     original_dataset = \
         lib.graphprot_dataloader.load_clip_seq([TRAIN_RBP_ID], use_embedding=FLAGS.use_embedding,
                                                fold_algo=FLAGS.fold_algo,
                                                probabilistic=FLAGS.probabilistic, w=FLAGS.folding_winsize,
                                                nucleotide_label=True, modify_leaks=False)[0]  # load one at a time
+
+    try:
+        # This one corrects the nucleotide bias at the beginning or at the end of a viewpoint region
+        dataset = \
+            lib.graphprot_dataloader.load_clip_seq([TRAIN_RBP_ID], use_embedding=FLAGS.use_embedding,
+                                                   fold_algo=FLAGS.fold_algo,
+                                                   probabilistic=FLAGS.probabilistic, w=FLAGS.folding_winsize,
+                                                   nucleotide_label=True, modify_leaks=True)[0]
+    except ValueError as e:
+        print(e)
+        dataset = original_dataset
+
     ig_ids = list(dataset['id'][:20])
     np.save(os.path.join(output_dir, 'splits.npy'), dataset['splits'])
+    folds = list(range(len(dataset['splits'])))
     manager = mp.Manager()
     q = manager.Queue()
     pool = Pool(FLAGS.parallel_processes + 1)
     logger_thread = pool.apply_async(Logger, (q,))
-    pool.map(functools.partial(run_one_rbp, q=q), range(len(dataset['splits'])-2), chunksize=1)
+    pool.map(functools.partial(run_one_rbp, q=q), folds, chunksize=1)
 
     q.put('kill')  # terminate logger thread
     pool.close()

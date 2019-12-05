@@ -18,7 +18,13 @@ def summarize_10fold_results(path, outfile_name):
                 except pd.errors.EmptyDataError:
                     print(rbp_name, 'has no results')
                     continue
-                auc, original_auc = list(file['auc']), list(file['original_auc'])
+
+                original_auc = list(file['original_auc'])
+                if 'auc' in file.keys():
+                    auc = list(file['auc'])
+                else:
+                    auc = list(file['original_auc'])
+
                 if len(auc) < 10:
                     print(rbp_name, 'lacks %d folds' % (10 - len(auc)))
                 all_dicts.append({

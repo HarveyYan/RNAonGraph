@@ -175,7 +175,6 @@ def sparse_att_gcl(name, inputs, units, reuse=True):
 
 
 def sparse_dense_matmult_batch(sp_a, b):
-
     def map_function(x):
         i, dense_slice = x[0], x[1]
         sparse_slice = tf.sparse.reshape(tf.sparse.slice(
@@ -191,8 +190,21 @@ def sparse_dense_matmult_batch(sp_a, b):
 def joint_layer(name, inputs, units, reuse=True, batch_axis=False,
                 use_attention=False):
     '''
-    1. undirectional
-    2. convalent adjacency matrix is unrolled 10 times
+    1. viewing the RNA secondary structure as undirected graph
+       (in fact, the bidrectional lstm after the GNN layers
+       would tell us something about the direction later)
+    2. the undirected adjacency matrix would contain the equilibrium base pairing probabilities,
+       or the actual base pairs sampled from that probabilities
+    3. attention is only enabled when the adjacency tensor has a batch_size dimension,
+       that comes with a shape: (batch_size, nb_nodes, nb_nodes); therefore the adjacency tensor
+       in this case must follow a dense implementation, since tensorflow doesn't have a
+       very good support for sparse matrix multiplication over rank 2.
+        3.1 when there isn't a batch axis, for a adjacency matrix that has shape:
+            (batch_size * nb_nodes, batch_size * nb_nodes), a sparse implementation must
+            then be followed, otherwise the it may not be fit into the
+            memory.
+        3.2 Attention is only possible in the dense setting, for in the sparse settings, attention
+            would require too much memory
     '''
     with tf.variable_scope(name, reuse=tf.AUTO_REUSE if reuse else False):
         # adj_tensor: list (size nb_bonds) of [length, length] matrices
@@ -214,7 +226,7 @@ def joint_layer(name, inputs, units, reuse=True, batch_axis=False,
                 coefs = tf.nn.softmax(tf.nn.leaky_relu(logits) * bias_mat)
                 bp_msg = tf.matmul(coefs, msg_bond)
             else:
-                bp_msg = tf.matmul(adj_tensor, msg_bond)
+                bp_msg = tf.matmul(adj_tensor, msg_bond) # / (tf.reduce_sum(adj_tensor, axis=-1, keepdims=True) + 1e-6)
             output.append(bp_msg)
             output.append(conv1d('conv1', input_dim, units, 10, annotations, biases=False,
                                  pad_mode='SAME_EVEN', pad_val='CONSTANT', variables_on_cpu=False))

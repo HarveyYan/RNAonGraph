@@ -39,18 +39,18 @@ def save_weblogo(save_path):
 
         viewpoint_region = list(np.where(pseudo_label == 1)[0])
 
-        if viewpoint_region[0] - 10 >= 0:
-            starting_string = ''.join(['PACGU'[seq[c]] for c in list(range(viewpoint_region[0] - 10,
+        if viewpoint_region[0] - 5 >= 0:
+            starting_string = ''.join(['PACGU'[seq[c]] for c in list(range(viewpoint_region[0] - 5,
                                                                            viewpoint_region[0])) + viewpoint_region[
-                                                                                                   :10]])
+                                                                                                   :5]])
             if np.max(label) == 1:
                 pos_logo_start.append(starting_string)
             else:
                 neg_logo_start.append(starting_string)
-        if viewpoint_region[-1] + 11 <= len(seq):
-            ending_string = ''.join(['PACGU'[seq[c]] for c in viewpoint_region[-10:] +
+        if viewpoint_region[-1] + 6 <= len(seq):
+            ending_string = ''.join(['PACGU'[seq[c]] for c in viewpoint_region[-5:] +
                                      list(range(viewpoint_region[-1] + 1,
-                                                viewpoint_region[-1] + 11))])
+                                                viewpoint_region[-1] + 6))])
             if np.max(label) == 1:
                 pos_logo_end.append(ending_string)
             else:
@@ -78,11 +78,15 @@ if __name__ == "__main__":
         os.makedirs(save_path)
     from tqdm import tqdm
 
-    for rbp in ['PARCLIP_PUM2']: #tqdm(RBP_LIST):
-        dataset = \
-            lib.graphprot_dataloader.load_clip_seq(
-                [rbp], use_embedding=False,
-                load_mat=False, nucleotide_label=True, modify_leaks=True)[0]  # load one at a time
+    for rbp in tqdm(RBP_LIST):
+        try:
+            dataset = \
+                lib.graphprot_dataloader.load_clip_seq(
+                    [rbp], use_embedding=False,
+                    load_mat=False, nucleotide_label=True, modify_leaks=True)[0]  # load one at a time
+        except ValueError as e:
+            print(e)
+            continue
         rbp_path = os.path.join(save_path, rbp)
         if not os.path.exists(rbp_path):
             os.makedirs(rbp_path)

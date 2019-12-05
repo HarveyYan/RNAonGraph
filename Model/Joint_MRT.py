@@ -4,7 +4,8 @@ import time
 import math
 import numpy as np
 import tensorflow as tf
-from lib.AMSGrad import AMSGrad
+import subprocess as sp
+from Bio.Align.Applications import ClustalwCommandline
 
 basedir = os.path.split(os.path.dirname(os.path.abspath(__file__)))[0]
 sys.path.append(basedir)
@@ -15,6 +16,7 @@ from lib.rgcn_utils import normalize
 import lib.plot, lib.logger, lib.clr
 import lib.ops.LSTM, lib.ops.Linear, lib.ops.Conv1D
 from lib.tf_ghm_loss import get_ghm_weights
+from lib.AMSGrad import AMSGrad
 
 
 class JMRT:
@@ -462,6 +464,50 @@ class JMRT:
                                   subticks_frequency=10, highlight={'r': [viewpoint_region]},
                                   save_path=saveto)
             counter += 1
+
+    def extract_sequence_motifs(self, X, y, interp_steps=100, save_path=None, max_examples=np.inf, mer_size=12):
+        counter = 0
+        all_mers = []
+        for _node_tensor, _segment, _raw_seq, _label in zip(*X, y):
+            if np.max(_label) == 0:
+                continue
+            if counter >= max_examples:
+                break
+            _meshed_node_tensor = np.array([self.embedding_vec[idx] for idx in _node_tensor])
+            _meshed_reference_input = np.zeros_like(_meshed_node_tensor)
+            new_node_tensor = []
+            for i in range(0, interp_steps + 1):
+                new_node_tensor.append(
+                    _meshed_reference_input + i / interp_steps * (_meshed_node_tensor - _meshed_reference_input))
+
+            feed_dict = {
+                self.node_tensor: np.concatenate(np.array(new_node_tensor), axis=0),
+                self.max_len: _segment,
+                self.segment_length: [_segment] * (interp_steps + 1),
+                self.is_training_ph: False
+            }
+
+            grads = self.sess.run(self.g_nodes, feed_dict).reshape((interp_steps + 1, _segment, 4))
+            grads = (grads[:-1] + grads[1:]) / 2.0
+            node_scores = np.sum(np.average(grads, axis=0) * (_meshed_node_tensor - _meshed_reference_input), axis=-1)
+            mer_scores = []
+            for start in range(len(node_scores) - mer_size + 1):
+                mer_scores.append(np.sum(node_scores[start: start + mer_size]))
+            all_mers.append(_raw_seq[np.argmax(mer_scores): np.argmax(mer_scores) + mer_size].upper().replace('T', 'U'))
+            counter += 1
+
+        fasta_path = os.path.join(save_path, 'tmp.fa')
+        with open(fasta_path, 'w') as f:
+            for i, seq in enumerate(all_mers):
+                print('>{}'.format(i), file=f)
+                print(seq, file=f)
+        # multiple sequence alignment
+        cline = ClustalwCommandline("clustalw2", infile=fasta_path, type="DNA", outfile=fasta_path, output="FASTA")
+        sp.call(str(cline), shell=True)
+        motif_path = os.path.join(save_path, 'sequence_motif.fa')
+        lib.plot.plot_weblogo(fasta_path, motif_path)
+        os.remove(fasta_path)
+
 
     def delete(self):
         tf.reset_default_graph()

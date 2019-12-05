@@ -6,6 +6,11 @@ import numpy as np
 import tensorflow as tf
 import threading
 from queue import Queue
+import scipy.sparse as sp
+from scipy.sparse.linalg import norm
+import forgi.graph.bulge_graph as fgb
+import subprocess
+from Bio.Align.Applications import ClustalwCommandline
 
 basedir = os.path.split(os.path.dirname(os.path.abspath(__file__)))[0]
 sys.path.append(basedir)
@@ -13,7 +18,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from Model import _stats
 from lib.rgcn_utils import joint_layer, normalize
-import lib.plot, lib.logger, lib.clr
+import lib.plot, lib.logger, lib.clr, lib.rna_utils
 import lib.ops.LSTM, lib.ops.Linear, lib.ops.Conv1D
 from lib.tf_ghm_loss import get_ghm_weights
 from lib.AMSGrad import AMSGrad
@@ -27,8 +32,11 @@ class BackgroundGenerator(threading.Thread):
         self.size_train = y.shape[0]
         self.batch_size = batch_size
         self.iters_per_epoch = self.size_train // batch_size + (0 if self.size_train % batch_size == 0 else 1)
+        self.sampling = kwargs.get('sampling', False)
+        # importance sampling or adaptive sampling the neighbourhood
+        # a sampler needs to obtain a set of graphs prior to the training taking place
 
-        self.queue = Queue(self.iters_per_epoch)
+        self.queue = Queue(10)  # self.iters_per_epoch)
         self.daemon = True
         self.kill = threading.Event()
         self.start()
@@ -36,8 +44,8 @@ class BackgroundGenerator(threading.Thread):
     def run(self):
         while True:
             permute = np.random.permutation(self.size_train)
-            node_tensor, all_rel_data, all_row_col, segment_length, raw_seq = JointAdaModel.indexing_iterable(
-                self.X, permute)
+            node_tensor, all_rel_data, all_row_col, segment_length, raw_seq = \
+                JointAdaModel.indexing_iterable(self.X, permute)
             y = self.y[permute]
             for i in range(self.iters_per_epoch):
                 _node_tensor, _rel_data, _row_col, _segment, _labels \
@@ -52,7 +60,11 @@ class BackgroundGenerator(threading.Thread):
                 _node_tensor = np.array(
                     [np.pad(seq, [_max_len - len(seq), 0], mode='constant') for seq in _node_tensor])
                 _labels = np.array([np.pad(label, [_max_len - len(label), 0], mode='constant') for label in _labels])
-                all_adj_mat = JointAdaModel._merge_sparse_submatrices(_rel_data, _row_col, _segment)
+                if not self.sampling:
+                    # the original adjacency matrix will be supplied
+                    all_adj_mat = JointAdaModel._merge_sparse_submatrices(_rel_data, _row_col, _segment)
+                else:
+                    all_adj_mat = self.graph_sampler(_rel_data, _row_col, _segment)
                 self.queue.put([_node_tensor, _mask_offset, all_adj_mat, _labels])
                 if self.kill.is_set():
                     return
@@ -161,7 +173,7 @@ class JointAdaModel:
                 cell = tf.contrib.rnn.GRUCell(self.units)
 
             adj_mat = tf.sparse.to_dense(self.adj_mat_ph, validate_indices=False)
-
+            self.dense_adj_mat = adj_mat
             for i in range(self.layers):
                 name = 'joint_convolutional' if self.reuse_weights else 'joint_convolutional_%d' % (i + 1)
                 # variables for sparse implementation default placement to gpu
@@ -294,6 +306,7 @@ class JointAdaModel:
         )
 
         self.g_nodes = tf.gradients(self.prediction[:, 1], self.node_tensor)[0]
+        self.g_adj_mat = tf.gradients(self.prediction[:, 1], self.dense_adj_mat)[0]
 
     def _init_session(self):
         gpu_options = tf.GPUOptions()
@@ -315,27 +328,70 @@ class JointAdaModel:
         lib.plot.reset()
 
     @classmethod
-    def _merge_sparse_submatrices(cls, data, row_col, segments):
+    def _merge_sparse_submatrices(cls, data, row_col, segments, merge_mode='stack'):
         '''
         merge sparse submatrices to 3 dimensional sparse tensor
         take note that padding has to be made in the beginning of each submatrix
         '''
 
         all_data, all_row_col = [], []
-        max_size = np.max(segments)
-        for i, (_data, _row_col, _segment) in enumerate(zip(data, row_col, segments)):
-            all_data.append(_data[2])
-            all_data.append(_data[3])
-            all_row_col.append(np.concatenate([(np.ones((len(_row_col[2]), 1)) * i).astype(np.int32),
-                                               (np.array(_row_col[2]) + max_size - _segment).reshape(-1, 2)], axis=-1))
-            all_row_col.append(np.concatenate([(np.ones((len(_row_col[3]), 1)) * i).astype(np.int32),
-                                               (np.array(_row_col[3]) + max_size - _segment).reshape(-1, 2)], axis=-1))
+        if merge_mode == 'concat':
+            # concatenate submatrices along existing dimensions
+            size = 0
+            for _data, _row_col, _segment in zip(data, row_col, segments):
+                all_data.append(_data[2])
+                all_data.append(_data[3])
+                all_row_col.append(np.array(_row_col[2]).reshape((-1, 2)) + size)
+                all_row_col.append(np.array(_row_col[3]).reshape((-1, 2)) + size)
+                size += _segment
 
-        return tf.compat.v1.SparseTensorValue(
-            np.concatenate(all_row_col),
-            np.concatenate(all_data),
-            (len(segments), max_size, max_size)
-        )
+            return tf.compat.v1.SparseTensorValue(
+                np.concatenate(all_row_col),
+                np.concatenate(all_data),
+                (size, size)
+            )
+        elif merge_mode == 'stack':
+            max_size = np.max(segments)
+            for i, (_data, _row_col, _segment) in enumerate(zip(data, row_col, segments)):
+                all_data.append(_data[2])
+                all_data.append(_data[3])
+
+                all_row_col.append(np.concatenate([(np.ones((len(_row_col[2]), 1)) * i).astype(np.int32),
+                                                   (np.array(_row_col[2]) + max_size - _segment).reshape(-1, 2)],
+                                                  axis=-1))
+                all_row_col.append(np.concatenate([(np.ones((len(_row_col[3]), 1)) * i).astype(np.int32),
+                                                   (np.array(_row_col[3]) + max_size - _segment).reshape(-1, 2)],
+                                                  axis=-1))
+
+            return tf.compat.v1.SparseTensorValue(
+                np.concatenate(all_row_col),
+                np.concatenate(all_data),
+                (len(segments), max_size, max_size)
+            )
+        else:
+            raise ValueError('merge mode only supports stack and concat')
+
+    @classmethod
+    def graph_sampler(cls, batch_data, batch_row_col, batch_segment, neighbourhood_size):
+        # adj_mat in dense form adopting a shape of batch_size x nb_nodes x nb_nodes
+        # adj_mat may have paddings in the beginning
+
+        # from top layer to bottom layer
+        all_adj_mat = []
+        res = cls._merge_sparse_submatrices(batch_data, batch_row_col, batch_segment, merge_mode='concat')
+        whole_mat = sp.coo_matrix((res.values, (res.indices[:, 0], res.indices[:, 1])), shape=res.dense_shape)
+        for ng_idx, ng_size in enumerate(neighbourhood_size):
+            # iterate each graph
+            sampled_data, sampled_row_col, sampled_segment = [], [], []
+            for i, segment in enumerate(batch_segment):
+                offset = int(np.sum(batch_segment[:i]))
+                idx = np.arange(offset, offset + segment)
+                local_mat = whole_mat[idx, :][:, idx]
+                column_norm = norm(local_mat, axis=0)
+                proposal_dist = column_norm / np.sum(column_norm)
+                sampled_idx = np.random.choice(proposal_dist, ng_size, replace=False, p=proposal_dist)
+
+                # if ng_idx == 0
 
     @classmethod
     def indexing_iterable(cls, iterable, idx):
@@ -574,6 +630,176 @@ class JointAdaModel:
                                   subticks_frequency=10, highlight={'r': [viewpoint_region]},
                                   save_path=saveto)
             counter += 1
+
+    def extract_motifs(self, X, y, interp_steps=100, save_path=None, max_examples=np.inf, mer_size=12):
+        counter = 0
+        all_mers = []
+        all_struct_context = []
+        for _node_tensor, _rel_data, _row_col, _segment, _raw_seq, _label in zip(*X, y):
+            if np.max(_label) == 0:
+                continue
+            if counter >= max_examples:
+                break
+            _struct, _mfe_adj_mat = lib.rna_utils.fold_seq_rnafold(_raw_seq)
+            _struct = ''.join(['.()'[c] for c in np.argmax(_struct, axis=-1)])
+            # convert to undirected base pairing probability matrix
+            _mfe_adj_mat = (_mfe_adj_mat > 2).astype(np.float32)
+            _mfe_adj_mat = np.array(_mfe_adj_mat.todense())
+
+            array_mfe_adj_mat = np.stack([_mfe_adj_mat] * (interp_steps + 1), axis=0)
+            _meshed_node_tensor = np.array([self.embedding_vec[idx] for idx in _node_tensor])
+            _meshed_reference_input = np.zeros_like(_meshed_node_tensor)
+            new_node_tensor = []
+            for i in range(0, interp_steps + 1):
+                new_node_tensor.append(
+                    _meshed_reference_input + i / interp_steps * (_meshed_node_tensor - _meshed_reference_input))
+
+            feed_dict = {
+                self.node_tensor: np.array(new_node_tensor),
+                self.dense_adj_mat: array_mfe_adj_mat,
+                self.mask_offset: np.zeros((interp_steps + 1,), np.int32),
+                self.is_training_ph: False
+            }
+
+            grads = self.sess.run(self.g_nodes, feed_dict).reshape((interp_steps + 1, _segment, 4))
+            grads = (grads[:-1] + grads[1:]) / 2.0
+            node_scores = np.sum(np.average(grads, axis=0) * (_meshed_node_tensor - _meshed_reference_input), axis=-1)
+
+            mer_scores = []
+            for start in range(len(node_scores) - mer_size + 1):
+                mer_scores.append(np.sum(node_scores[start: start + mer_size]))
+            slicing_idx = np.argmax(mer_scores)
+            all_mers.append(_raw_seq[slicing_idx: slicing_idx + mer_size].upper().replace('T', 'U'))
+            all_struct_context.append(fgb.BulgeGraph.from_dotbracket(_struct).to_element_string()
+                                      [slicing_idx: slicing_idx + mer_size].upper())
+            counter += 1
+
+        seq_fasta_path = os.path.join(save_path, 'tmp_seq.fa')
+        with open(seq_fasta_path, 'w') as f:
+            for i, seq in enumerate(all_mers):
+                print('>{}'.format(i), file=f)
+                print(seq, file=f)
+        # multiple sequence alignment
+        cline = ClustalwCommandline("clustalw2", infile=seq_fasta_path, type="DNA", outfile=seq_fasta_path, output="FASTA")
+        subprocess.call(str(cline), shell=True)
+        motif_path = os.path.join(save_path, 'sequence_motif.jpg')
+        lib.plot.plot_weblogo(seq_fasta_path, motif_path)
+
+        aligned_seq = {}
+        with open(seq_fasta_path, 'r') as f:
+            for line in f:
+                if line.startswith('>'):
+                    seq_id = int(line.rstrip()[1:])
+                else:
+                    aligned_seq[seq_id] = line.rstrip()
+            aligned_seq[seq_id] = line.rstrip()
+
+        # structural motifs
+        struct_fasta_path = os.path.join(save_path, 'tmp_struct.fa')
+        with open(struct_fasta_path, 'w') as f:
+            for i, struct_context in enumerate(all_struct_context):
+                print('>{}'.format(i), file=f)
+                struct_context = list(struct_context)
+                seq = aligned_seq[i]
+                for j in range(len(seq)):
+                    if seq[j] == '-':
+                        struct_context = struct_context[:j] + ['-'] + struct_context[j:]
+                print(''.join(struct_context), file=f)
+        motif_path = os.path.join(save_path, 'struct_motif.jpg')
+        lib.plot.plot_weblogo(struct_fasta_path, motif_path)
+
+        os.remove(seq_fasta_path)
+
+    def integrated_gradients_2d(self, X, y, ids, interp_steps=100, save_path=None, max_plots=np.inf):
+        counter = 0
+        all_acc_hl, all_acc_nonhl = [], []
+        for _node_tensor, _raw_seq, _label, _id in zip(*X, y, ids):
+            if np.max(_label) == 0:
+                continue
+            if counter >= max_plots:
+                break
+
+            _struct, _mfe_adj_mat = lib.rna_utils.fold_seq_rnafold(_raw_seq)
+            _struct = ''.join(['.()'[c] for c in np.argmax(_struct, axis=-1)])
+            # convert to undirected base pairing probability matrix
+            _mfe_adj_mat = (_mfe_adj_mat > 2).astype(np.float32)
+
+            _mfe_adj_mat = np.array(_mfe_adj_mat.todense())
+            _node_tensor = np.array([self.embedding_vec[idx] for idx in _node_tensor])
+            feed_dict = {
+                self.node_tensor: _node_tensor[None, :, ],
+                self.dense_adj_mat: _mfe_adj_mat[None, :, :],
+                self.mask_offset: np.array([0]),
+                self.is_training_ph: False
+            }
+            pos_pred = self.sess.run(self.prediction, feed_dict)[0][1]
+            if pos_pred < 0.95:
+                # we only visualize strongly predicted candidates
+                continue
+
+            array_mfe_adj_mat = np.stack([_mfe_adj_mat] * (interp_steps + 1), axis=0)
+            array_node_tensor = np.stack([_node_tensor] * (interp_steps + 1), axis=0)
+            interp_ratio = []
+            for i in range(0, interp_steps + 1):
+                interp_ratio.append(i / interp_steps)
+            interp_ratio = np.array(interp_ratio)[:, None, None]
+
+            new_adj_mat = array_mfe_adj_mat * interp_ratio
+            new_node_tensor = array_node_tensor * interp_ratio
+
+            # interpolating sequence while having its structure fixed
+            feed_dict = {
+                self.node_tensor: new_node_tensor,
+                self.dense_adj_mat: array_mfe_adj_mat,
+                self.mask_offset: np.zeros((interp_steps + 1,), np.int32),
+                self.is_training_ph: False
+            }
+            node_grads = self.sess.run(self.g_nodes, feed_dict)
+            avg_node_grads = np.average((node_grads[:-1] + node_grads[1:]) / 2.0, axis=0)
+            node_scores = np.sum(avg_node_grads * _node_tensor, -1)
+
+            # interpolating structure while having its sequence fixed
+            feed_dict = {
+                self.node_tensor: array_node_tensor,
+                self.dense_adj_mat: new_adj_mat,
+                self.mask_offset: np.zeros((interp_steps + 1,), np.int32),
+                self.is_training_ph: False
+            }
+            adj_mat_grads = self.sess.run(self.g_adj_mat, feed_dict)
+            avg_adj_mat_grads = np.average((adj_mat_grads[:-1] + adj_mat_grads[1:]) / 2.0, axis=0)
+            adj_mat_scores = avg_adj_mat_grads * _mfe_adj_mat
+
+            # select the top 20 most highly activated nucleotides and basepairs
+            hl_nt_idx = np.argsort(node_scores)[-30:]
+            row_col = np.array(list(zip(*np.nonzero(adj_mat_scores))))
+            hl_bp_idx = row_col[np.argsort(adj_mat_scores[row_col[:, 0], row_col[:, 1]])[-30:]]
+            if save_path is not None:
+                saveto = os.path.join(save_path, '%s.jpg' % (_id))
+            else:
+                saveto = '%s.jpg' % (_id)
+            try:
+                lib.plot.plot_rna_struct(_raw_seq, _struct, highlight_nt_idx=hl_nt_idx, highlight_bp_idx=hl_bp_idx,
+                                         saveto=saveto)
+            except StopIteration as e:
+                print(e)
+                continue
+            counter += 1
+            bp_access = np.sum(avg_adj_mat_grads, axis=-1)
+            all_acc_hl.extend(bp_access[hl_nt_idx])
+            all_acc_nonhl.extend(bp_access[list(set(range(len(node_scores))).difference(hl_nt_idx))])
+
+        import matplotlib.pyplot as plt
+        figure = plt.figure(figsize=(10, 10))
+        plt.hist(all_acc_hl, label='structural accessibility of sequence motifs', density=True, alpha=0.7)
+        plt.hist(all_acc_nonhl, label='structural accessibility of background sequence', density=True, alpha=0.5)
+        legend = plt.legend()
+        plt.setp(legend.texts, **{'fontname': 'Times New Roman'})
+        if save_path is not None:
+            saveto = os.path.join(save_path, 'struct_access.jpg')
+        else:
+            saveto = 'struct_access.jpg'
+        plt.savefig(saveto, dpi=350)
+        plt.close(figure)
 
     def delete(self):
         tf.reset_default_graph()
