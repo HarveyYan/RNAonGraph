@@ -631,84 +631,112 @@ class JointAdaModel:
                                   save_path=saveto)
             counter += 1
 
-    def extract_motifs(self, X, y, interp_steps=100, save_path=None, max_examples=np.inf, mer_size=12):
+    def extract_motifs(self, X, y, interp_steps=100, save_path=None, max_examples=400, mer_size=12):
         counter = 0
         all_mers = []
         all_struct_context = []
-        for _node_tensor, _rel_data, _row_col, _segment, _raw_seq, _label in zip(*X, y):
+        all_scores = []
+
+        if max_examples < 200:
+            print('Warning; we will use 2000 kmers so that max_examples should be at least equal to 2000')
+            max_examples = 200
+
+        from tqdm import tqdm
+        for _node_tensor, _segment, _raw_seq, _label in tqdm(zip(*X, y)):
             if np.max(_label) == 0:
                 continue
             if counter >= max_examples:
                 break
-            _struct, _mfe_adj_mat = lib.rna_utils.fold_seq_rnafold(_raw_seq)
-            _struct = ''.join(['.()'[c] for c in np.argmax(_struct, axis=-1)])
-            # convert to undirected base pairing probability matrix
-            _mfe_adj_mat = (_mfe_adj_mat > 2).astype(np.float32)
-            _mfe_adj_mat = np.array(_mfe_adj_mat.todense())
 
-            array_mfe_adj_mat = np.stack([_mfe_adj_mat] * (interp_steps + 1), axis=0)
-            _meshed_node_tensor = np.array([self.embedding_vec[idx] for idx in _node_tensor])
-            _meshed_reference_input = np.zeros_like(_meshed_node_tensor)
-            new_node_tensor = []
-            for i in range(0, interp_steps + 1):
-                new_node_tensor.append(
-                    _meshed_reference_input + i / interp_steps * (_meshed_node_tensor - _meshed_reference_input))
+            # for each nucleic sequence we consider at least 100 folding hypothesis
+            cmd = 'echo "%s" | RNAsubopt --stochBT=%d' % (_raw_seq, 1000)
+            struct_list = subprocess.check_output(cmd, shell=True). \
+                              decode('utf-8').rstrip().split('\n')[1:]
+            struct_list = list(set(struct_list))[:100] # 100 unique structures for each sequence
+            adj_mat_tmp = np.zeros((len(_raw_seq), len(_raw_seq)), dtype=np.float32)
 
-            feed_dict = {
-                self.node_tensor: np.array(new_node_tensor),
-                self.dense_adj_mat: array_mfe_adj_mat,
-                self.mask_offset: np.zeros((interp_steps + 1,), np.int32),
-                self.is_training_ph: False
-            }
+            for _struct in struct_list:
+                _adj_mat = adj_mat_tmp.copy()
+                bg = fgb.BulgeGraph.from_dotbracket(_struct)
+                for i, ele in enumerate(_struct):
+                    if ele == '(':
+                        _adj_mat[i, bg.pairing_partner(i + 1) - 1] = 1.
+                    elif ele == ')':
+                        _adj_mat[i, bg.pairing_partner(i + 1) - 1] = 1.
 
-            grads = self.sess.run(self.g_nodes, feed_dict).reshape((interp_steps + 1, _segment, 4))
-            grads = (grads[:-1] + grads[1:]) / 2.0
-            node_scores = np.sum(np.average(grads, axis=0) * (_meshed_node_tensor - _meshed_reference_input), axis=-1)
+                array_mfe_adj_mat = np.stack([_adj_mat] * (interp_steps + 1), axis=0)
+                _meshed_node_tensor = np.array([self.embedding_vec[idx] for idx in _node_tensor])
+                _meshed_reference_input = np.zeros_like(_meshed_node_tensor)
+                new_node_tensor = []
+                for i in range(0, interp_steps + 1):
+                    new_node_tensor.append(
+                        _meshed_reference_input + i / interp_steps * (_meshed_node_tensor - _meshed_reference_input))
 
-            mer_scores = []
-            for start in range(len(node_scores) - mer_size + 1):
-                mer_scores.append(np.sum(node_scores[start: start + mer_size]))
-            slicing_idx = np.argmax(mer_scores)
-            all_mers.append(_raw_seq[slicing_idx: slicing_idx + mer_size].upper().replace('T', 'U'))
-            all_struct_context.append(fgb.BulgeGraph.from_dotbracket(_struct).to_element_string()
-                                      [slicing_idx: slicing_idx + mer_size].upper())
+                feed_dict = {
+                    self.node_tensor: np.array(new_node_tensor),
+                    self.dense_adj_mat: array_mfe_adj_mat,
+                    self.mask_offset: np.zeros((interp_steps + 1,), np.int32),
+                    self.is_training_ph: False
+                }
+
+                grads = self.sess.run(self.g_nodes, feed_dict).reshape((interp_steps + 1, _segment, 4))
+                grads = (grads[:-1] + grads[1:]) / 2.0
+                node_scores = np.sum(np.average(grads, axis=0) * (_meshed_node_tensor - _meshed_reference_input),
+                                     axis=-1)
+
+                mer_scores = []
+                for start in range(len(node_scores) - mer_size + 1):
+                    mer_scores.append(np.sum(node_scores[start: start + mer_size]))
+                slicing_idx = np.argmax(mer_scores)
+                all_mers.append(_raw_seq[slicing_idx: slicing_idx + mer_size].upper().replace('T', 'U'))
+                all_struct_context.append(fgb.BulgeGraph.from_dotbracket(_struct).to_element_string()
+                                          [slicing_idx: slicing_idx + mer_size].upper())
+                all_scores.append(np.max(mer_scores))
             counter += 1
 
-        seq_fasta_path = os.path.join(save_path, 'tmp_seq.fa')
-        with open(seq_fasta_path, 'w') as f:
-            for i, seq in enumerate(all_mers):
-                print('>{}'.format(i), file=f)
-                print(seq, file=f)
-        # multiple sequence alignment
-        cline = ClustalwCommandline("clustalw2", infile=seq_fasta_path, type="DNA", outfile=seq_fasta_path, output="FASTA")
-        subprocess.call(str(cline), shell=True)
-        motif_path = os.path.join(save_path, 'sequence_motif.jpg')
-        lib.plot.plot_weblogo(seq_fasta_path, motif_path)
+        FNULL = open(os.devnull, 'w')
+        ranked_idx = np.argsort(all_scores)[::-1]
 
-        aligned_seq = {}
-        with open(seq_fasta_path, 'r') as f:
-            for line in f:
-                if line.startswith('>'):
-                    seq_id = int(line.rstrip()[1:])
-                else:
-                    aligned_seq[seq_id] = line.rstrip()
-            aligned_seq[seq_id] = line.rstrip()
+        for top_rank in [500, 1000, 2000]:
+            # align top_rank mers
+            best_mers = np.array(all_mers)[ranked_idx[:top_rank]]
+            best_struct = np.array(all_struct_context)[ranked_idx[:top_rank]]
+            fasta_path = os.path.join(save_path, 'top%d_mers.fa' % (top_rank))
+            with open(fasta_path, 'w') as f:
+                for i, seq in enumerate(best_mers):
+                    print('>{}'.format(i), file=f)
+                    print(seq, file=f)
+            # multiple sequence alignment
+            out_fasta_path = os.path.join(save_path, 'aligned_top%d_mers.fa' % (top_rank))
+            cline = ClustalwCommandline("clustalw2", infile=fasta_path, type="DNA", outfile=out_fasta_path,
+                                        output="FASTA")
+            subprocess.call(str(cline), shell=True, stdout=FNULL)
+            motif_path = os.path.join(save_path, 'top%d-sequence_motif.jpg' % (top_rank))
+            lib.plot.plot_weblogo(out_fasta_path, motif_path)
 
-        # structural motifs
-        struct_fasta_path = os.path.join(save_path, 'tmp_struct.fa')
-        with open(struct_fasta_path, 'w') as f:
-            for i, struct_context in enumerate(all_struct_context):
-                print('>{}'.format(i), file=f)
-                struct_context = list(struct_context)
-                seq = aligned_seq[i]
-                for j in range(len(seq)):
-                    if seq[j] == '-':
-                        struct_context = struct_context[:j] + ['-'] + struct_context[j:]
-                print(''.join(struct_context), file=f)
-        motif_path = os.path.join(save_path, 'struct_motif.jpg')
-        lib.plot.plot_weblogo(struct_fasta_path, motif_path)
+            aligned_seq = {}
+            with open(out_fasta_path, 'r') as f:
+                for line in f:
+                    if line.startswith('>'):
+                        seq_id = int(line.rstrip()[1:])
+                    else:
+                        aligned_seq[seq_id] = line.rstrip()
+                aligned_seq[seq_id] = line.rstrip()
 
-        os.remove(seq_fasta_path)
+            # structural motifs
+            fasta_path = os.path.join(save_path, 'aligned_struct.fa')
+            with open(fasta_path, 'w') as f:
+                for i, struct_context in enumerate(best_struct):
+                    print('>{}'.format(i), file=f)
+                    struct_context = list(struct_context)
+                    seq = aligned_seq[i]
+                    for j in range(len(seq)):
+                        if seq[j] == '-':
+                            struct_context = struct_context[:j] + ['-'] + struct_context[j:]
+                    print(''.join(struct_context), file=f)
+            motif_path = os.path.join(save_path, 'top%d-struct_motif.jpg')
+            lib.plot.plot_weblogo(fasta_path, motif_path)
+
 
     def integrated_gradients_2d(self, X, y, ids, interp_steps=100, save_path=None, max_plots=np.inf):
         counter = 0

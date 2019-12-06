@@ -10,14 +10,17 @@ import matplotlib.colors as mc
 import shutil
 import subprocess as sp
 
-
 weblogo_opts = '-X NO --fineprint "" --resolution "350" --format "PNG"'
 weblogo_opts += ' -C "#CB2026" A A'
 weblogo_opts += ' -C "#34459C" C C'
 weblogo_opts += ' -C "#FBB116" G G'
 weblogo_opts += ' -C "#0C8040" T T'
 weblogo_opts += ' -C "#0C8040" U U'
-
+weblogo_opts += ' -C "#CB2026" M M'
+weblogo_opts += ' -C "#FBB116" I I'
+weblogo_opts += ' -C "#0C8040" S S'
+weblogo_opts += ' -C "#34459C" F F'
+weblogo_opts += ' -C "#34459C" T T'
 
 plt.style.use('classic')
 matplotlib.rcParams.update({'figure.figsize': [10.0, 10.0], 'font.family': 'Times New Roman', 'figure.dpi': 350})
@@ -158,7 +161,7 @@ def plot_t(ax, base, left_edge, height, color):
 
 
 def plot_u(ax, base, left_edge, height, color):
-    ax.add_patch(matplotlib.patches.Ellipse(xy=[left_edge + 0.5, base + 0.3 * height], width=1., height=0.6*height,
+    ax.add_patch(matplotlib.patches.Ellipse(xy=[left_edge + 0.5, base + 0.3 * height], width=1., height=0.6 * height,
                                             facecolor=color, edgecolor=color))
     ax.add_patch(
         matplotlib.patches.Ellipse(xy=[left_edge + 0.5, base + 0.3 * height], width=0.7 * 1., height=0.7 * 0.6 * height,
@@ -169,8 +172,9 @@ def plot_u(ax, base, left_edge, height, color):
     ax.add_patch(matplotlib.patches.Rectangle(xy=[left_edge, base + 0.29 * height], width=0.01, height=0.71 * height,
                                               facecolor=color, edgecolor=color, fill=True))
 
-    ax.add_patch(matplotlib.patches.Rectangle(xy=[left_edge+0.95, base + 0.29 * height], width=0.05, height=0.71 * height,
-                                              facecolor=color, edgecolor=color, fill=True))
+    ax.add_patch(
+        matplotlib.patches.Rectangle(xy=[left_edge + 0.95, base + 0.29 * height], width=0.05, height=0.71 * height,
+                                     facecolor=color, edgecolor=color, fill=True))
 
 
 default_colors = {0: 'green', 1: 'blue', 2: 'orange', 3: 'red'}
@@ -260,8 +264,7 @@ def plot_weights(array,
 
 
 def plot_rna_struct(seq, struct, ax=None, offset=(0, 0), text_kwargs={}, backbone_kwargs={},
-             basepair_kwargs={}, highlight_bp_idx=[], highlight_nt_idx=[], lighten=0.7, saveto='tmp.png'):
-
+                    basepair_kwargs={}, highlight_bp_idx=[], highlight_nt_idx=[], lighten=0.7, saveto='tmp.png'):
     with open('tmp.fa', 'w') as file:
         file.write('>tmp\n%s\n%s' % (seq, struct))
     cg = forgi.load_rna('tmp.fa', allow_many=False)
@@ -362,6 +365,7 @@ def plot_rna_struct(seq, struct, ax=None, offset=(0, 0), text_kwargs={}, backbon
 
     plt.savefig(saveto, dpi=350)
     plt.close(fig)
+
 
 def plot_weblogo(msa_file_path, save_path):
     if shutil.which("weblogo") is None:

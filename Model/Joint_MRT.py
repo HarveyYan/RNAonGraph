@@ -54,7 +54,6 @@ class JMRT:
                     beta2=0.999
                 )
 
-
             with tf.variable_scope('Classifier', reuse=tf.AUTO_REUSE):
                 self._build_ggnn()
                 self._loss()
@@ -465,9 +464,15 @@ class JMRT:
                                   save_path=saveto)
             counter += 1
 
-    def extract_sequence_motifs(self, X, y, interp_steps=100, save_path=None, max_examples=np.inf, mer_size=12):
+    def extract_sequence_motifs(self, X, y, interp_steps=100, save_path=None, max_examples=4000, mer_size=12):
         counter = 0
         all_mers = []
+        all_scores = []
+
+        if max_examples < 2000:
+            print('Warning; we will use 1000 kmers so that max_examples should be at least equal to 1000')
+            max_examples = 2000
+
         for _node_tensor, _segment, _raw_seq, _label in zip(*X, y):
             if np.max(_label) == 0:
                 continue
@@ -493,21 +498,55 @@ class JMRT:
             mer_scores = []
             for start in range(len(node_scores) - mer_size + 1):
                 mer_scores.append(np.sum(node_scores[start: start + mer_size]))
+            max_scores = np.max(node_scores)
             all_mers.append(_raw_seq[np.argmax(mer_scores): np.argmax(mer_scores) + mer_size].upper().replace('T', 'U'))
+            all_scores.append(max_scores)
             counter += 1
 
-        fasta_path = os.path.join(save_path, 'tmp.fa')
+        FNULL = open(os.devnull, 'w')
+        ranked_idx = np.argsort(all_scores)[::-1]
+
+        for top_rank in [500, 1000, 2000]:
+            # align top_rank mers
+            best_mers = np.array(all_mers)[ranked_idx[:top_rank]]
+            fasta_path = os.path.join(save_path, 'top%d_mers.fa' % (top_rank))
+            with open(fasta_path, 'w') as f:
+                for i, seq in enumerate(best_mers):
+                    print('>{}'.format(i), file=f)
+                    print(seq, file=f)
+            # multiple sequence alignment
+            out_fasta_path = os.path.join(save_path, 'aligned_top%d_mers.fa' % (top_rank))
+            cline = ClustalwCommandline("clustalw2", infile=fasta_path, type="DNA", outfile=out_fasta_path,
+                                        output="FASTA")
+            sp.call(str(cline), shell=True, stdout=FNULL)
+            motif_path = os.path.join(save_path, 'top%d-sequence_motif.jpg' % (top_rank))
+            lib.plot.plot_weblogo(out_fasta_path, motif_path)
+
+        even_mers = all_mers[::2]
+        fasta_path = os.path.join(save_path, 'even_mers.fa')
         with open(fasta_path, 'w') as f:
-            for i, seq in enumerate(all_mers):
+            for i, seq in enumerate(even_mers):
                 print('>{}'.format(i), file=f)
                 print(seq, file=f)
         # multiple sequence alignment
-        cline = ClustalwCommandline("clustalw2", infile=fasta_path, type="DNA", outfile=fasta_path, output="FASTA")
-        sp.call(str(cline), shell=True)
-        motif_path = os.path.join(save_path, 'sequence_motif.fa')
-        lib.plot.plot_weblogo(fasta_path, motif_path)
-        os.remove(fasta_path)
+        out_fasta_path = os.path.join(save_path, 'aligned_even_mers.fa')
+        cline = ClustalwCommandline("clustalw2", infile=fasta_path, type="DNA", outfile=out_fasta_path, output="FASTA")
+        sp.call(str(cline), shell=True, stdout=FNULL)
+        motif_path = os.path.join(save_path, 'top1000-even-sequence_motif.jpg')
+        lib.plot.plot_weblogo(out_fasta_path, motif_path)
 
+        odd_mers = all_mers[1::2]
+        fasta_path = os.path.join(save_path, 'odd_mers.fa')
+        with open(fasta_path, 'w') as f:
+            for i, seq in enumerate(odd_mers):
+                print('>{}'.format(i), file=f)
+                print(seq, file=f)
+        # multiple sequence alignment
+        out_fasta_path = os.path.join(save_path, 'aligned_odd_mers.fa')
+        cline = ClustalwCommandline("clustalw2", infile=fasta_path, type="DNA", outfile=out_fasta_path, output="FASTA")
+        sp.call(str(cline), shell=True, stdout=FNULL)
+        motif_path = os.path.join(save_path, 'top1000-odd-sequence_motif.jpg')
+        lib.plot.plot_weblogo(out_fasta_path, motif_path)
 
     def delete(self):
         tf.reset_default_graph()
