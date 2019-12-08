@@ -1,4 +1,5 @@
 import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import numpy as np
 import tensorflow as tf
 import lib.graphprot_dataloader
@@ -13,7 +14,7 @@ BATCH_SIZE = 128
 RBP_LIST = lib.graphprot_dataloader.all_rbps
 expr_path_list = os.listdir('output/Joint-MRT-Graphprot-debiased')
 expr_name = [dirname.split('-')[-1] for dirname in expr_path_list]
-DEVICES = ['/gpu:0', '/gpu:1', '/gpu:0', '/gpu:1']
+DEVICES = ['/gpu:0', '/gpu:0', '/gpu:1', '/gpu:1']
 
 hp = {
     'learning_rate': 2e-4,
@@ -81,7 +82,7 @@ def plot_one_rbp(rbp):
                                 allow_pickle=True)
 
     full_expr_path = os.path.join('output/Joint-MRT-Graphprot-debiased', expr_path)
-    motif_dir = os.path.join(full_expr_path, 'old_motifs')
+    motif_dir = os.path.join(full_expr_path, 'pred_ranked_motifs')
     if not os.path.exists(motif_dir):
         os.makedirs(motif_dir)
 
@@ -117,11 +118,23 @@ def plot_one_rbp(rbp):
             print('cannot load back weights; skipping...')
             return
 
-        all_data = [dataset['seq'], dataset['segment_size'], dataset['raw_seq']]
+        pos_idx = np.where(np.array([np.max(label) for label in dataset['label']]) == 1)[0]
+        all_data = [
+            dataset['seq'][pos_idx],
+            dataset['segment_size'][pos_idx],
+            dataset['raw_seq'][pos_idx]]
 
+        pos_preds = model.predict(all_data, BATCH_SIZE)[:, 1]
+        ranked_idx = np.argsort(pos_preds)[::-1]
+        print(rbp, 'top pos prediction average [100, 500, 1000, 2000]', pos_preds[ranked_idx][:100].mean(), pos_preds[ranked_idx][:500].mean(),
+              pos_preds[ranked_idx][:1000].mean(), pos_preds[ranked_idx][:2000].mean())
+        all_data = [dataset['seq'][pos_idx][ranked_idx],
+                    dataset['segment_size'][pos_idx][ranked_idx],
+                    dataset['raw_seq'][pos_idx][ranked_idx]]
+        print(rbp, 'number of positive examples', len(all_data[0]))
         model.extract_sequence_motifs(
-            all_data, dataset['label'], save_path=motif_dir,
-            max_examples=4000, mer_size=10)
+            all_data, save_path=motif_dir,
+            max_examples=2000, mer_size=10)
 
         model.delete()
     else:

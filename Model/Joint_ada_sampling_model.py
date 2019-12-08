@@ -74,6 +74,19 @@ class BackgroundGenerator(threading.Thread):
         return next_item
 
 
+def mesh_struct(_struct):
+    row_col = []
+    bg = fgb.BulgeGraph.from_dotbracket(_struct)
+    for i, ele in enumerate(_struct):
+        if ele == '(':
+            row_col.append((i, bg.pairing_partner(i + 1) - 1))
+    row_col = np.array(row_col)
+    row_col = [None, None, row_col, row_col[:, ::-1]]
+    data = [None, None, np.ones(len(row_col[2])), np.ones(len(row_col[3]))]
+    segment = len(_struct)
+    return (data, row_col, segment)
+
+
 class JointAdaModel:
 
     def __init__(self, node_dim, embedding_vec, gpu_device, **kwargs):
@@ -631,15 +644,131 @@ class JointAdaModel:
                                   save_path=saveto)
             counter += 1
 
+    def rank_extract_motifs(self, X, interp_steps=100, save_path=None, max_examples=400, mer_size=12, p=None):
+        counter = 0
+        all_mers, all_struct_context = [], []
+        # stores all mers and struct context of all folding hypothesis
+
+        for _node_tensor, _segment, _raw_seq in zip(*X):
+            if counter >= max_examples:
+                break
+            # for each nucleic sequence we consider 10 random folding hypothesis
+            cmd = 'echo "%s" | RNAsubopt --stochBT=%d' % (_raw_seq, 5000)
+            struct_list = subprocess.check_output(cmd, shell=True). \
+                              decode('utf-8').rstrip().split('\n')[1:]
+            struct_list = list(set(struct_list))  # all unique structures
+
+            if p is None:
+                all_data, all_row_col, all_segment = [], [], []
+                for _struct in struct_list:
+                    row_col = []
+                    bg = fgb.BulgeGraph.from_dotbracket(_struct)
+                    for i, ele in enumerate(_struct):
+                        if ele == '(':
+                            row_col.append((i, bg.pairing_partner(i + 1) - 1))
+                    row_col = np.array(row_col)
+                    row_col = [None, None, row_col, row_col[:, ::-1]]
+                    all_row_col.append(row_col)
+                    all_data.append([None, None, np.ones(len(row_col[2])), np.ones(len(row_col[3]))])
+                    all_segment.append(len(_struct))
+                    all_row_col = np.array(all_row_col)
+                    all_data = np.array(all_data)
+                    all_segment = np.array(all_segment)
+            else:
+                res = np.array(list(p.imap(mesh_struct, struct_list)))
+                all_data = res[:, 0]
+                all_row_col = res[:, 1]
+                all_segment = res[:, 2]
+
+            preds = self.predict(
+                [np.array([_node_tensor] * len(struct_list)), all_data, all_row_col, all_segment, None], 128)
+            pos_preds = preds[:, 1]
+            best_cand_idx = np.argsort(pos_preds)[::-1][0]
+
+            print(preds[best_cand_idx][:, 1])
+
+            _struct = struct_list[best_cand_idx]
+            all_adj_mat = self._merge_sparse_submatrices(
+                [all_data[best_cand_idx]] * (interp_steps + 1),
+                [all_row_col[best_cand_idx]] * (interp_steps + 1),
+                [all_segment[best_cand_idx]] * (interp_steps + 1))
+
+            _meshed_node_tensor = np.array([self.embedding_vec[idx] for idx in _node_tensor])
+            _meshed_reference_input = np.zeros_like(_meshed_node_tensor)
+            new_node_tensor = []
+            for i in range(0, interp_steps + 1):
+                new_node_tensor.append(
+                    _meshed_reference_input + i / interp_steps * (_meshed_node_tensor - _meshed_reference_input))
+
+            feed_dict = {
+                self.node_tensor: np.array(new_node_tensor),
+                self.adj_mat_ph: all_adj_mat,
+                self.mask_offset: np.zeros((interp_steps + 1,), np.int32),
+                self.is_training_ph: False
+            }
+
+            grads = self.sess.run(self.g_nodes, feed_dict).reshape((interp_steps + 1, _segment, 4))
+            grads = (grads[:-1] + grads[1:]) / 2.0
+            node_scores = np.sum(np.average(grads, axis=0) * (_meshed_node_tensor - _meshed_reference_input),
+                                 axis=-1)
+
+            mer_scores = []
+            for start in range(len(node_scores) - mer_size + 1):
+                mer_scores.append(np.sum(node_scores[start: start + mer_size]))
+            slicing_idx = np.argmax(mer_scores)
+            all_mers.append(_raw_seq[slicing_idx: slicing_idx + mer_size].upper().replace('T', 'U'))
+            all_struct_context.append(fgb.BulgeGraph.from_dotbracket(_struct).to_element_string()
+                                      [slicing_idx: slicing_idx + mer_size].upper())
+            counter += 1
+
+        FNULL = open(os.devnull, 'w')
+        for top_rank in [100, 500, 1000, 2000]:
+            # align top_rank mers
+            best_mers = np.array(all_mers)[:top_rank]
+            best_struct = np.array(all_struct_context)[:top_rank]
+            fasta_path = os.path.join(save_path, 'top%d_mers.fa' % (top_rank))
+            with open(fasta_path, 'w') as f:
+                for i, seq in enumerate(best_mers):
+                    print('>{}'.format(i), file=f)
+                    print(seq, file=f)
+            # multiple sequence alignment
+            out_fasta_path = os.path.join(save_path, 'aligned_top%d_mers.fa' % (top_rank))
+            cline = ClustalwCommandline("clustalw2", infile=fasta_path, type="DNA", outfile=out_fasta_path,
+                                        output="FASTA")
+            subprocess.call(str(cline), shell=True, stdout=FNULL)
+            motif_path = os.path.join(save_path, 'top%d-sequence_motif.jpg' % (top_rank))
+            lib.plot.plot_weblogo(out_fasta_path, motif_path)
+
+            aligned_seq = {}
+            with open(out_fasta_path, 'r') as f:
+                for line in f:
+                    if line.startswith('>'):
+                        seq_id = int(line.rstrip()[1:])
+                    else:
+                        aligned_seq[seq_id] = line.rstrip()
+                aligned_seq[seq_id] = line.rstrip()
+
+            # structural motifs
+            fasta_path = os.path.join(save_path, 'aligned_top%d_struct.fa' % (top_rank))
+            with open(fasta_path, 'w') as f:
+                for i, struct_context in enumerate(best_struct):
+                    print('>{}'.format(i), file=f)
+                    struct_context = list(struct_context)
+                    seq = aligned_seq[i]
+                    for j in range(len(seq)):
+                        if seq[j] == '-':
+                            struct_context = struct_context[:j] + ['-'] + struct_context[j:]
+                    print(''.join(struct_context), file=f)
+            motif_path = os.path.join(save_path, 'top%d-struct_motif.jpg' % (top_rank))
+            lib.plot.plot_weblogo(fasta_path, motif_path)
+
     def extract_motifs(self, X, y, interp_steps=100, save_path=None, max_examples=400, mer_size=12):
         counter = 0
-        all_mers = []
-        all_struct_context = []
-        all_scores = []
+        all_mers, all_struct_context, all_scores = [], [], []
+        # stores all mers and struct context of all folding hypothesis
 
-        if max_examples < 200:
-            print('Warning; we will use 2000 kmers so that max_examples should be at least equal to 2000')
-            max_examples = 200
+        best_mers, best_struct_context, best_scores = [], [], []
+        # stores the best mer and struct_context of the 1000 folding hypothesis from each sequence
 
         from tqdm import tqdm
         for _node_tensor, _segment, _raw_seq, _label in tqdm(zip(*X, y)):
@@ -647,12 +776,20 @@ class JointAdaModel:
                 continue
             if counter >= max_examples:
                 break
-
-            # for each nucleic sequence we consider at least 100 folding hypothesis
-            cmd = 'echo "%s" | RNAsubopt --stochBT=%d' % (_raw_seq, 1000)
+            mers, struct_context, scores = [], [], []
+            # for each nucleic sequence we consider 10 random folding hypothesis
+            cmd = 'echo "%s" | RNAsubopt --stochBT=%d' % (_raw_seq, 10000)
             struct_list = subprocess.check_output(cmd, shell=True). \
                               decode('utf-8').rstrip().split('\n')[1:]
-            struct_list = list(set(struct_list))[:100] # 100 unique structures for each sequence
+            struct_list = list(set(struct_list))  # all unique structures
+
+            pos_idx = np.where(_label == 1)[0]
+            len_pos_idx = len(pos_idx)
+            unpaired_proportion = 1. - np.array(
+                list(map(lambda st: len(np.where(np.array(list(st))[pos_idx] != '.')[0]), struct_list))) / len_pos_idx
+            prob = unpaired_proportion / np.sum(unpaired_proportion)
+            if len(struct_list) > 10:
+                struct_list = np.random.choice(struct_list, 10, replace=False, p=prob)
             adj_mat_tmp = np.zeros((len(_raw_seq), len(_raw_seq)), dtype=np.float32)
 
             for _struct in struct_list:
@@ -688,16 +825,61 @@ class JointAdaModel:
                 for start in range(len(node_scores) - mer_size + 1):
                     mer_scores.append(np.sum(node_scores[start: start + mer_size]))
                 slicing_idx = np.argmax(mer_scores)
-                all_mers.append(_raw_seq[slicing_idx: slicing_idx + mer_size].upper().replace('T', 'U'))
-                all_struct_context.append(fgb.BulgeGraph.from_dotbracket(_struct).to_element_string()
-                                          [slicing_idx: slicing_idx + mer_size].upper())
-                all_scores.append(np.max(mer_scores))
+                mers.append(_raw_seq[slicing_idx: slicing_idx + mer_size].upper().replace('T', 'U'))
+                struct_context.append(fgb.BulgeGraph.from_dotbracket(_struct).to_element_string()
+                                      [slicing_idx: slicing_idx + mer_size].upper())
+                scores.append(np.max(mer_scores))
+
+            one_struct_idx = np.argmax(scores)
+            best_scores.append(scores[one_struct_idx])
+            best_mers.append(mers[one_struct_idx])
+            best_struct_context.append(struct_context[one_struct_idx])
+
+            all_scores.extend(scores)
+            all_mers.extend(mers)
+            all_struct_context.extend(struct_context)
             counter += 1
 
         FNULL = open(os.devnull, 'w')
-        ranked_idx = np.argsort(all_scores)[::-1]
 
-        for top_rank in [500, 1000, 2000]:
+        fasta_path = os.path.join(save_path, 'best_mers.fa')
+        with open(fasta_path, 'w') as f:
+            for i, seq in enumerate(best_mers):
+                print('>{}'.format(i), file=f)
+                print(seq, file=f)
+        # multiple sequence alignment
+        out_fasta_path = os.path.join(save_path, 'aligned_best_mers.fa')
+        cline = ClustalwCommandline("clustalw2", infile=fasta_path, type="DNA", outfile=out_fasta_path,
+                                    output="FASTA")
+        subprocess.call(str(cline), shell=True, stdout=FNULL)
+        motif_path = os.path.join(save_path, 'best-sequence_motif.jpg')
+        lib.plot.plot_weblogo(out_fasta_path, motif_path)
+
+        aligned_seq = {}
+        with open(out_fasta_path, 'r') as f:
+            for line in f:
+                if line.startswith('>'):
+                    seq_id = int(line.rstrip()[1:])
+                else:
+                    aligned_seq[seq_id] = line.rstrip()
+            aligned_seq[seq_id] = line.rstrip()
+
+        # structural motifs
+        fasta_path = os.path.join(save_path, 'aligned_best_struct.fa')
+        with open(fasta_path, 'w') as f:
+            for i, struct_context in enumerate(best_struct_context):
+                print('>{}'.format(i), file=f)
+                struct_context = list(struct_context)
+                seq = aligned_seq[i]
+                for j in range(len(seq)):
+                    if seq[j] == '-':
+                        struct_context = struct_context[:j] + ['-'] + struct_context[j:]
+                print(''.join(struct_context), file=f)
+        motif_path = os.path.join(save_path, 'best-struct_motif.jpg')
+        lib.plot.plot_weblogo(fasta_path, motif_path)
+
+        ranked_idx = np.argsort(all_scores)[::-1]
+        for top_rank in [2000]:
             # align top_rank mers
             best_mers = np.array(all_mers)[ranked_idx[:top_rank]]
             best_struct = np.array(all_struct_context)[ranked_idx[:top_rank]]
@@ -724,7 +906,7 @@ class JointAdaModel:
                 aligned_seq[seq_id] = line.rstrip()
 
             # structural motifs
-            fasta_path = os.path.join(save_path, 'aligned_struct.fa')
+            fasta_path = os.path.join(save_path, 'aligned_top%d_struct.fa' % (top_rank))
             with open(fasta_path, 'w') as f:
                 for i, struct_context in enumerate(best_struct):
                     print('>{}'.format(i), file=f)
@@ -734,9 +916,8 @@ class JointAdaModel:
                         if seq[j] == '-':
                             struct_context = struct_context[:j] + ['-'] + struct_context[j:]
                     print(''.join(struct_context), file=f)
-            motif_path = os.path.join(save_path, 'top%d-struct_motif.jpg')
+            motif_path = os.path.join(save_path, 'top%d-struct_motif.jpg' % (top_rank))
             lib.plot.plot_weblogo(fasta_path, motif_path)
-
 
     def integrated_gradients_2d(self, X, y, ids, interp_steps=100, save_path=None, max_plots=np.inf):
         counter = 0

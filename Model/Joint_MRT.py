@@ -464,18 +464,12 @@ class JMRT:
                                   save_path=saveto)
             counter += 1
 
-    def extract_sequence_motifs(self, X, y, interp_steps=100, save_path=None, max_examples=4000, mer_size=12):
+    def extract_sequence_motifs(self, X, interp_steps=100, save_path=None, max_examples=4000, mer_size=12):
         counter = 0
         all_mers = []
         all_scores = []
 
-        if max_examples < 2000:
-            print('Warning; we will use 1000 kmers so that max_examples should be at least equal to 1000')
-            max_examples = 2000
-
-        for _node_tensor, _segment, _raw_seq, _label in zip(*X, y):
-            if np.max(_label) == 0:
-                continue
+        for _node_tensor, _segment, _raw_seq in zip(*X):
             if counter >= max_examples:
                 break
             _meshed_node_tensor = np.array([self.embedding_vec[idx] for idx in _node_tensor])
@@ -504,11 +498,9 @@ class JMRT:
             counter += 1
 
         FNULL = open(os.devnull, 'w')
-        ranked_idx = np.argsort(all_scores)[::-1]
-
-        for top_rank in [500, 1000, 2000]:
+        for top_rank in [100, 500, 1000, 2000]:
             # align top_rank mers
-            best_mers = np.array(all_mers)[ranked_idx[:top_rank]]
+            best_mers = np.array(all_mers)[:top_rank]
             fasta_path = os.path.join(save_path, 'top%d_mers.fa' % (top_rank))
             with open(fasta_path, 'w') as f:
                 for i, seq in enumerate(best_mers):
