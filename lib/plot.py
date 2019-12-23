@@ -16,11 +16,13 @@ weblogo_opts += ' -C "#34459C" C C'
 weblogo_opts += ' -C "#FBB116" G G'
 weblogo_opts += ' -C "#0C8040" T T'
 weblogo_opts += ' -C "#0C8040" U U'
+
 weblogo_opts += ' -C "#CB2026" M M'
 weblogo_opts += ' -C "#FBB116" I I'
 weblogo_opts += ' -C "#0C8040" S S'
 weblogo_opts += ' -C "#34459C" F F'
 weblogo_opts += ' -C "#34459C" T T'
+weblogo_opts += ' -C "#34459C" E E' # external regions that include F/T
 
 plt.style.use('classic')
 matplotlib.rcParams.update({'figure.figsize': [10.0, 10.0], 'font.family': 'Times New Roman', 'figure.dpi': 350})

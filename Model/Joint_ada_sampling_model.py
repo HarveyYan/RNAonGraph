@@ -644,31 +644,69 @@ class JointAdaModel:
                                   save_path=saveto)
             counter += 1
 
-    def rank_extract_motifs(self, X, interp_steps=100, save_path=None, max_examples=400, mer_size=12, p=None):
+    def rank_extract_motifs(self, X, interp_steps=100, save_path=None, max_examples=400,
+                            mer_size=12, p=None, gradient_threshold=0.4):
         counter = 0
         all_scores, all_mers, all_struct_context = [], [], []
-        top_10_mers, top_10_struct_context = [], []
-        top_50_mers, top_50_struct_context = [], []
-        tmp_f = open(os.path.join(save_path, 'output.txt'), 'w')
+        offset = 1000
+
+        if os.path.exists(os.path.join(save_path, 'output.txt')):
+            lines = open(os.path.join(save_path, 'output.txt'), 'r').readlines()
+            for i in range(0, len(lines), 6):
+                seq_scores = [float(num) for num in (lines[i: i+6][0].rstrip() + lines[i: i+6][1].
+                                                     rstrip())[1:-1].replace('  ', ' ').split(' ')]
+
+                seq_mers = (lines[i: i+6][2].rstrip() + lines[i: i+6][3].
+                            rstrip())[1:-1].replace('\'', '').split(' ')
+                seq_struct_context = (lines[i: i + 6][4].rstrip() + lines[i: i + 6][5].
+                            rstrip())[1:-1].replace('\'', '').split(' ')
+
+                all_scores.extend(seq_scores)
+                all_mers.extend(seq_mers)
+                all_struct_context.extend(seq_struct_context)
+                counter += 1
+                offset += 1
+
+        tmp_f = open(os.path.join(save_path, 'output.txt'), 'a')
 
         for _node_tensor, _segment, _raw_seq in zip(*X):
             if counter >= max_examples:
                 break
+
+            if offset > 0:
+                offset -= 1
+                continue
+
+            # only keep the binding site portion
+            pos_idx = np.where(np.array(list(_raw_seq)) <= 'Z')[0]
+            extended_start = max(pos_idx[0] - 50, 0)
+            extended_end = min(pos_idx[-1] + 50, _segment)
+            extended_region = list(range(extended_start, extended_end))
+            _raw_seq = ''.join(np.array(list(_raw_seq))[extended_region])
+            _segment = len(_raw_seq)
+            _node_tensor = np.array(_node_tensor)[extended_region]
+
+            # viewpoint_idx = (np.array(list(_raw_seq)) <= 'Z').astype(np.int32)
+            # _raw_seq = ''.join(np.array(list(_raw_seq))[viewpoint_idx == 1])
+            # _segment = len(_raw_seq)
+            # _node_tensor = np.array(_node_tensor)[viewpoint_idx == 1]
+
             # for each nucleic sequence we consider 10000 random folding hypothesis
-            cmd = 'echo "%s" | RNAsubopt --stochBT=%d' % (_raw_seq, 10000)
+            cmd = 'echo "%s" | RNAsubopt --stochBT=%d' % (_raw_seq, 300000)
             struct_list = subprocess.check_output(cmd, shell=True). \
                               decode('utf-8').rstrip().split('\n')[1:]
             struct_list = list(set(struct_list))  # all unique structures
-
-            if len(struct_list) > 2000:
-                viewpoint_idx = (np.array(list(_raw_seq)) <= 'Z').astype(np.int32)
-                len_pos_idx = np.sum(viewpoint_idx)
-                # sample 2000 based on the number of unpaired nucleotides
-                unpaired_proportion = np.array(
-                    list(map(lambda st: np.sum(np.array(list(st))[viewpoint_idx == 1] == '.'),
-                             struct_list))) / len_pos_idx
-                prob = unpaired_proportion / np.sum(unpaired_proportion)
-                struct_list = np.random.choice(struct_list, 2000, replace=False, p=prob)
+            if '.' * _segment in struct_list:
+                struct_list.remove('.' * _segment)
+            # if len(struct_list) > 2000:
+            #     viewpoint_idx = (np.array(list(_raw_seq)) <= 'Z').astype(np.int32)
+            #     len_pos_idx = np.sum(viewpoint_idx)
+            #     # sample 2000 based on the number of unpaired nucleotides
+            #     unpaired_proportion = np.array(
+            #         list(map(lambda st: np.sum(np.array(list(st))[viewpoint_idx == 1] == '.'),
+            #                  struct_list))) / len_pos_idx
+            #     prob = unpaired_proportion / np.sum(unpaired_proportion)
+            #     struct_list = np.random.choice(struct_list, 2000, replace=False, p=prob)
 
             if p is None:
                 all_data, all_row_col, all_segment = [], [], []
@@ -692,10 +730,10 @@ class JointAdaModel:
                 all_row_col = res[:, 1]
                 all_segment = res[:, 2]
 
-            # preds = self.predict(
-            #     [np.array([_node_tensor] * len(struct_list)), all_data, all_row_col, all_segment, None], 128)
-            # pos_preds = preds[:, 1]
-            # best_cand_idx = np.argsort(pos_preds)[::-1][0]
+            preds = self.predict(
+                [np.array([_node_tensor] * len(struct_list)), all_data, all_row_col, all_segment, None], 128)
+            pos_preds = preds[:, 1]
+            best_cand_idx = np.argsort(pos_preds)[::-1][:10]
 
             _meshed_node_tensor = np.array([self.embedding_vec[idx] for idx in _node_tensor])
             _meshed_reference_input = np.zeros_like(_meshed_node_tensor)
@@ -706,7 +744,7 @@ class JointAdaModel:
             new_node_tensor = np.array(new_node_tensor)
 
             seq_scores, seq_mers, seq_struct_context = [], [], []
-            for struct_idx in range(2000):
+            for struct_idx in best_cand_idx:
                 _struct = struct_list[struct_idx]
                 all_adj_mat = self._merge_sparse_submatrices(
                     [all_data[struct_idx]] * (interp_steps + 1),
@@ -735,15 +773,10 @@ class JointAdaModel:
                 seq_struct_context.append(fgb.BulgeGraph.from_dotbracket(_struct).to_element_string()
                                           [slicing_idx: slicing_idx + mer_size].upper())
 
-            top_idx = np.argsort(seq_scores)
-            print(np.array(seq_scores)[top_idx[:50]], file=tmp_f)
-            print(np.array(seq_mers)[top_idx[:50]], file=tmp_f)
-            print(np.array(seq_struct_context)[top_idx[:50]], file=tmp_f)
+            print(np.array(seq_scores), file=tmp_f)
+            print(np.array(seq_mers), file=tmp_f)
+            print(np.array(seq_struct_context), file=tmp_f)
             tmp_f.flush()
-            top_10_mers.extend(np.array(seq_mers)[top_idx[:10]])
-            top_10_struct_context.extend(np.array(seq_struct_context)[top_idx[:10]])
-            top_50_mers.extend(np.array(seq_mers)[top_idx[:50]])
-            top_50_struct_context.extend(np.array(seq_struct_context)[top_idx[:50]])
 
             all_scores.extend(seq_scores)
             all_mers.extend(seq_mers)
@@ -753,86 +786,13 @@ class JointAdaModel:
         np.save(os.path.join(save_path, 'all_scores.npy'), all_scores)
         np.save(os.path.join(save_path, 'all_mers.npy'), all_mers)
         np.save(os.path.join(save_path, 'all_struct_context.npy'), all_struct_context)
-        tmp_f.close()
         FNULL = open(os.devnull, 'w')
 
-        fasta_path = os.path.join(save_path, 'best_10_mers.fa')
-        with open(fasta_path, 'w') as f:
-            for i, seq in enumerate(top_10_mers):
-                print('>{}'.format(i), file=f)
-                print(seq, file=f)
-        # multiple sequence alignment
-        out_fasta_path = os.path.join(save_path, 'aligned_best_10_mers.fa')
-        cline = ClustalwCommandline("clustalw2", infile=fasta_path, type="DNA", outfile=out_fasta_path,
-                                    output="FASTA")
-        subprocess.call(str(cline), shell=True, stdout=FNULL)
-        motif_path = os.path.join(save_path, 'best-10-sequence_motif.jpg')
-        lib.plot.plot_weblogo(out_fasta_path, motif_path)
-
-        aligned_seq = {}
-        with open(out_fasta_path, 'r') as f:
-            for line in f:
-                if line.startswith('>'):
-                    seq_id = int(line.rstrip()[1:])
-                else:
-                    aligned_seq[seq_id] = line.rstrip()
-            aligned_seq[seq_id] = line.rstrip()
-
-        # structural motifs
-        fasta_path = os.path.join(save_path, 'aligned_best_10_struct.fa')
-        with open(fasta_path, 'w') as f:
-            for i, struct_context in enumerate(top_10_struct_context):
-                print('>{}'.format(i), file=f)
-                struct_context = list(struct_context)
-                seq = aligned_seq[i]
-                for j in range(len(seq)):
-                    if seq[j] == '-':
-                        struct_context = struct_context[:j] + ['-'] + struct_context[j:]
-                print(''.join(struct_context), file=f)
-        motif_path = os.path.join(save_path, 'best-10-struct_motif.jpg')
-        lib.plot.plot_weblogo(fasta_path, motif_path)
-
-        fasta_path = os.path.join(save_path, 'best_50_mers.fa')
-        with open(fasta_path, 'w') as f:
-            for i, seq in enumerate(top_50_mers):
-                print('>{}'.format(i), file=f)
-                print(seq, file=f)
-        # multiple sequence alignment
-        out_fasta_path = os.path.join(save_path, 'aligned_best_50_mers.fa')
-        cline = ClustalwCommandline("clustalw2", infile=fasta_path, type="DNA", outfile=out_fasta_path,
-                                    output="FASTA")
-        subprocess.call(str(cline), shell=True, stdout=FNULL)
-        motif_path = os.path.join(save_path, 'best-50-sequence_motif.jpg')
-        lib.plot.plot_weblogo(out_fasta_path, motif_path)
-
-        aligned_seq = {}
-        with open(out_fasta_path, 'r') as f:
-            for line in f:
-                if line.startswith('>'):
-                    seq_id = int(line.rstrip()[1:])
-                else:
-                    aligned_seq[seq_id] = line.rstrip()
-            aligned_seq[seq_id] = line.rstrip()
-
-        # structural motifs
-        fasta_path = os.path.join(save_path, 'aligned_best_50_struct.fa')
-        with open(fasta_path, 'w') as f:
-            for i, struct_context in enumerate(top_50_struct_context):
-                print('>{}'.format(i), file=f)
-                struct_context = list(struct_context)
-                seq = aligned_seq[i]
-                for j in range(len(seq)):
-                    if seq[j] == '-':
-                        struct_context = struct_context[:j] + ['-'] + struct_context[j:]
-                print(''.join(struct_context), file=f)
-        motif_path = os.path.join(save_path, 'best-50-struct_motif.jpg')
-        lib.plot.plot_weblogo(fasta_path, motif_path)
-
-        sorted_idx = np.argsort(all_scores)
-        for top_rank in [100, 500, 1000, 2000, 4000]:
+        ranked_idx = np.argsort(all_scores)[::-1]
+        for top_rank in [2000, 3000, 4000, 5000]:
             # align top_rank mers
-            best_mers = np.array(all_mers)[sorted_idx[:top_rank]]
-            best_struct = np.array(all_struct_context)[sorted_idx[:top_rank]]
+            best_mers = np.array(all_mers)[ranked_idx[:top_rank]]
+            best_struct = np.array(all_struct_context)[ranked_idx[:top_rank]]
             fasta_path = os.path.join(save_path, 'top%d_mers.fa' % (top_rank))
             with open(fasta_path, 'w') as f:
                 for i, seq in enumerate(best_mers):
@@ -843,7 +803,7 @@ class JointAdaModel:
             cline = ClustalwCommandline("clustalw2", infile=fasta_path, type="DNA", outfile=out_fasta_path,
                                         output="FASTA")
             subprocess.call(str(cline), shell=True, stdout=FNULL)
-            motif_path = os.path.join(save_path, 'top%d-sequence_motif.jpg' % (top_rank))
+            motif_path = os.path.join(save_path, 'top%d_sequence_motif.jpg' % (top_rank))
             lib.plot.plot_weblogo(out_fasta_path, motif_path)
 
             aligned_seq = {}
@@ -866,8 +826,49 @@ class JointAdaModel:
                         if seq[j] == '-':
                             struct_context = struct_context[:j] + ['-'] + struct_context[j:]
                     print(''.join(struct_context), file=f)
-            motif_path = os.path.join(save_path, 'top%d-struct_motif.jpg' % (top_rank))
+            motif_path = os.path.join(save_path, 'top%d_struct_motif.jpg' % (top_rank))
             lib.plot.plot_weblogo(fasta_path, motif_path)
+
+        '''apply gradient threshold'''
+        best_mers = np.array(all_mers)[all_scores > gradient_threshold]
+        best_struct = np.array(all_struct_context)[all_scores > gradient_threshold]
+        print('%d pieces remain after applying threshold' % (len(best_mers)), file=tmp_f)
+        tmp_f.close()
+        fasta_path = os.path.join(save_path, 'threshold_mers.fa')
+        with open(fasta_path, 'w') as f:
+            for i, seq in enumerate(best_mers):
+                print('>{}'.format(i), file=f)
+                print(seq, file=f)
+        # multiple sequence alignment
+        out_fasta_path = os.path.join(save_path, 'aligned_threshold_mers.fa')
+        cline = ClustalwCommandline("clustalw2", infile=fasta_path, type="DNA", outfile=out_fasta_path,
+                                    output="FASTA")
+        subprocess.call(str(cline), shell=True, stdout=FNULL)
+        motif_path = os.path.join(save_path, 'threshold_0.4_sequence_motif.jpg')
+        lib.plot.plot_weblogo(out_fasta_path, motif_path)
+
+        aligned_seq = {}
+        with open(out_fasta_path, 'r') as f:
+            for line in f:
+                if line.startswith('>'):
+                    seq_id = int(line.rstrip()[1:])
+                else:
+                    aligned_seq[seq_id] = line.rstrip()
+            aligned_seq[seq_id] = line.rstrip()
+
+        # structural motifs
+        fasta_path = os.path.join(save_path, 'aligned_threshold_struct.fa')
+        with open(fasta_path, 'w') as f:
+            for i, struct_context in enumerate(best_struct):
+                print('>{}'.format(i), file=f)
+                struct_context = list(struct_context)
+                seq = aligned_seq[i]
+                for j in range(len(seq)):
+                    if seq[j] == '-':
+                        struct_context = struct_context[:j] + ['-'] + struct_context[j:]
+                print(''.join(struct_context), file=f)
+        motif_path = os.path.join(save_path, 'threshold_struct_motif.jpg')
+        lib.plot.plot_weblogo(fasta_path, motif_path)
 
     def integrated_gradients_2d(self, X, y, ids, interp_steps=100, save_path=None, max_plots=np.inf):
         counter = 0
