@@ -11,15 +11,15 @@ import shutil
 import subprocess as sp
 
 weblogo_opts = '-X NO --fineprint "" --resolution "350" --format "PNG"'
-weblogo_opts += ' -C "#CB2026" A A'
+weblogo_opts += ' -C "#0C8040" A A'
 weblogo_opts += ' -C "#34459C" C C'
 weblogo_opts += ' -C "#FBB116" G G'
-weblogo_opts += ' -C "#0C8040" T T'
-weblogo_opts += ' -C "#0C8040" U U'
+weblogo_opts += ' -C "#CB2026" T T'
+weblogo_opts += ' -C "#CB2026" U U'
 
-weblogo_opts += ' -C "#CB2026" M M'
+weblogo_opts += ' -C "#0C8040" M M'
 weblogo_opts += ' -C "#FBB116" I I'
-weblogo_opts += ' -C "#0C8040" S S'
+weblogo_opts += ' -C "#CB2026" S S'
 weblogo_opts += ' -C "#34459C" F F'
 weblogo_opts += ' -C "#34459C" T T'
 weblogo_opts += ' -C "#34459C" E E' # external regions that include F/T

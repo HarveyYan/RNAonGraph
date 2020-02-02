@@ -206,7 +206,7 @@ class JMRT:
 
     def _init_session(self):
         gpu_options = tf.GPUOptions()
-        gpu_options.per_process_gpu_memory_fraction = 0.3
+        gpu_options.per_process_gpu_memory_fraction = 0.2
         if type(self.gpu_device) is list:
             gpu_options.visible_device_list = ','.join([device[-1] for device in self.gpu_device])
         else:
