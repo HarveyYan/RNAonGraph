@@ -39,3 +39,8 @@ The graph neural net model simply replaces the convolutions with a graph message
 
 - We model two types of bonds in a secondary RNA graphs, that are the covalent bond forming the backbone of RNA, and the hydrogen bond connecting a base pair. We also consider direction of the RNA from 5' to 3', which effectively gives us four relations in the end. 
 
+## Reference
+
+Please consider citing our paper (an ISMB2020 submission) if you have leveraged our work in yours. 
+
+[The reference](https://www.biorxiv.org/content/10.1101/2020.02.11.931030v1)
